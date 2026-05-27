@@ -617,7 +617,7 @@ Linni.Killer:Toggle({
 })
 
 Linni.Auto:Toggle({
-    Title = "自动拾取金币[现在是糖果]",
+    Title = "自动拾取金币",
     Value = false,
     Callback = function(state)
         coinTaffy = state
