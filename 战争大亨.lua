@@ -103,6 +103,7 @@ local Confirmed = false
     local B = Window:Tab({Title = "透视", Icon = "eye"})
     local C = Window:Tab({Title = "传送", Icon = "rbxassetid://3944688398"})
     local D = Window:Tab({Title = "自瞄", Icon = "rbxassetid://4483345998"})
+    local R = Window:Tab({Title = "子追", Icon = "rbxassetid://4483345998"})
     local F = Window:Tab({Title = "攻击", Icon = "rbxassetid://4384392464"})
     local G = Window:Tab({Title = "修改", Icon = "rbxassetid://94831304996747"})
     local H = Window:Tab({Title = "内置", Icon = "settings"})
@@ -1544,6 +1545,98 @@ local Confirmed = false
             end
         end
     })
+    
+    local bulletTrackingSection = R:Section({Title = "子追设置", Opened = true})
+    
+    local bulletTrackingEnabled = false
+    local oldHook = nil
+    local bulletTrackingFOVring = false
+    
+    local function setupBulletTracking()
+        local Workspace = game:GetService("Workspace")
+        local Players = game:GetService("Players")
+        local LocalPlayer = Players.LocalPlayer
+        local Camera = Workspace.CurrentCamera
+        
+        local function getClosestHead()
+            if not LocalPlayer.Character then return nil end
+            if not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return nil end
+            
+            local closestHead = nil
+            local closestDistance = math.huge
+            
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local character = player.Character
+                    local root = character:FindFirstChild("HumanoidRootPart")
+                    local head = character:FindFirstChild("Head")
+                    local humanoid = character:FindFirstChildOfClass("Humanoid")
+                    local forcefield = character:FindFirstChild("ForceField")
+                    
+                    if root and head and humanoid and not forcefield and humanoid.Health > 0 then
+                        local distance = (root.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+                        if distance < closestDistance then
+                            closestHead = head
+                            closestDistance = distance
+                        end
+                    end
+                end
+            end
+            
+            return closestHead
+        end
+        
+        if not oldHook then
+            oldHook = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                local args = {...}
+                
+                if bulletTrackingEnabled and method == "Raycast" and not checkcaller() then
+                    local origin = args[1] or Camera.CFrame.Position
+                    local closestHead = getClosestHead()
+                    
+                    if closestHead then
+                        return {
+                            Instance = closestHead,
+                            Position = closestHead.Position,
+                            Normal = (origin - closestHead.Position).Unit,
+                            Material = Enum.Material.Plastic,
+                            Distance = (closestHead.Position - origin).Magnitude
+                        }
+                    end
+                end
+
+                return oldHook(self, ...)
+            end)
+        end
+    end
+    
+    bulletTrackingSection:Toggle({
+        Title = "子追",
+        Desc = "",
+        Locked = false,
+        Callback = function(t)
+            bulletTrackingEnabled = t
+            if t then
+                setupBulletTracking()
+            else
+                if oldHook then
+                    hookmetamethod(game, "__namecall", oldHook)
+                    oldHook = nil
+                end
+            end
+        end
+    })
+    
+    bulletTrackingSection:Toggle({
+        Title = "显示范围",
+        Desc = "",
+        Locked = false,
+        Callback = function(t)
+            bulletTrackingFOVring = t
+            FOVring.Visible = t
+        end
+    })
 
     aimbotSection:Button({
         Title = "刷新玩家列表",
@@ -2491,7 +2584,7 @@ local Confirmed = false
 
 WindUI:Notify({
                         Title = "QJ",
-                        Content = "为你启用脚本",
+                        Content = "为你启用战争大亨",
                         Duration = 3,
                         Icon = "alert-circle"
                     })
