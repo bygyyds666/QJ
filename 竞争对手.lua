@@ -1799,8 +1799,7 @@ do
 end
 
 WindUI:Notify({
-    Title = "pvp",
-    Content = "TnineHub!",
-    Icon = "check-circle",
+    Title = "琼玖脚本",
+    Content = "以为您启用竞争对手!",
     Duration = 5,
 })
