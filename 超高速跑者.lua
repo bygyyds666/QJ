@@ -39,12 +39,14 @@ Window:EditOpenButton({
 local MainTab = Window:Tab({Title = "主要功能", Icon = "settings"})
 MainTab:Section({Title = "主要功能", Opened = true})
 
+local walkSpeedEnabled = false
 MainTab:Slider({
-    Title = "设置速度",
+    Title = "修改玩家移动速度",
     Value = { Min = 0, Max = 500, Default = 16 },
     Callback = function(walkSpeed)
+        walkSpeedEnabled = true
         task.spawn(function()
-            while task.wait() do
+            while walkSpeedEnabled and task.wait() do
                 local localPlayer = game.Players.LocalPlayer
                 local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
                 if humanoid then
@@ -495,6 +497,26 @@ local farmExpStates = {
     exp15 = false,
     exp2 = false,
 }
+
+local fastExpEnabled = false
+expFarmSection:Toggle({
+    Title = "快速获得经验",
+    Default = false,
+    Callback = function(enabled)
+        fastExpEnabled = enabled
+        if enabled then
+            task.spawn(function()
+                while fastExpEnabled and task.wait(0.01) do
+                    local args = {
+                        1,
+                        false
+                    }
+                    game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("StepTaken"):FireServer(unpack(args))
+                end
+            end)
+        end
+    end
+})
 
 expFarmSection:Toggle({
     Title = "0.5倍经验（0级）",
