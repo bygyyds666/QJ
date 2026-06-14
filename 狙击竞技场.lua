@@ -1,1016 +1,1280 @@
-local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/bygyyds666/QJ/refs/heads/main/ui.lua"))()
+local repo = 'https://raw.githubusercontent.com/KingScriptAE/No-sirve-nada./refs/heads/main/'
+local function safeLoad(url)
+	local success, result = pcall(function()
+		return loadstring(game:HttpGet(url))()
+	end)
+	if not success then
+		warn("加载失败: " .. url)
+		return nil
+	end
+	return result
+end
 
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+local Library = safeLoad(repo .. 'Library.lua')
+local ThemeManager = safeLoad(repo .. 'addons/ThemeManager.lua')
+local SaveManager = safeLoad(repo .. 'addons/SaveManager.lua')
+
+if not Library then
+	game:GetService("StarterGui"):SetCore("SendNotification", {
+		Title = "错误",
+		Text = "UI 库加载失败，请检查网络或脚本资源",
+		Duration = 5,
+	})
+	return
+end
+
+local Options = Library.Options
+local Toggles = Library.Toggles
+
+local SoundService = game:GetService("SoundService")
 local RunService = game:GetService("RunService")
-local CoreGui = game:GetService("CoreGui")
-local Workspace = game:GetService("Workspace")
-local Camera = Workspace.CurrentCamera
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-repeat task.wait() until LocalPlayer and LocalPlayer.Character
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local cloneref = cloneref or function(instance) return instance end
 
-WindUI.TransparencyValue = 0.2
-WindUI:SetTheme("Dark")
-local Window = WindUI:CreateWindow({
-    Title = "QJ脚本",
-    Author = "作者：琼玖",
-    Transparent = true,
-    UserEnabled = true,
-    SideBarWidth = 120,
-    HasOutline = true,
-    BackgroundImageTransparency = 0.425,
-})
-Window:EditOpenButton({
-    Title = "狙击竞技场",
-    CornerRadius = UDim.new(16,16),
-    StrokeThickness = 2,
-    Draggable = true,
-})
-spawn(function()
-    local mf = Window.UIElements and Window.UIElements.Main
-    if not mf then repeat task.wait(); mf = Window.UIElements and Window.UIElements.Main until mf end
-    mf:GetPropertyChangedSignal("Visible"):Connect(applyBorderState)
-    applyBorderState()
+local PlayStartSound = Instance.new("Sound")
+PlayStartSound.Looped = false
+PlayStartSound.Volume = 1
+PlayStartSound.Parent = SoundService
+PlayStartSound:Play()
+PlayStartSound.Ended:Connect(function() PlayStartSound:Destroy() end)
+
+local ESPEnabled = false
+local ESP_ScreenGui = nil
+local ESPFolder = nil
+local ESPNameColor = Color3.fromRGB(0, 255, 127)
+local ESPBodyColor = Color3.fromRGB(0, 255, 127)
+local ESPNameSize = 14
+local ESPRainbowEnabled = false
+local ESPRainbowSpeed = 5
+local CurrentESPHue = 0
+
+local BackstabCheckEnabled = false
+local BackstabCooldown = 0
+local BACKSTAB_COOLDOWN_TIME = 3
+local DeathCheckEnabled = false
+
+local InfiniteJumpEnabled = false
+local JumpConnection = nil
+local SpeedEnabled = false
+local SpeedValue = 1
+local SpeedConnection = nil
+local GravityLoop = nil
+local originalGravity = workspace.Gravity
+
+local NightVisionEnabled = false
+local originalBrightness = Lighting.Brightness
+local originalAmbient = Lighting.Ambient
+
+local RainbowUIEnabled = false
+local RainbowUIScreenGui = nil
+local StatusIndicator = nil
+local animationConnection = nil
+
+local AimSettings = {
+	Enabled = false,
+	FOV = 100,
+	Smoothness = 10,
+	CrosshairDistance = 5,
+	FOVColor = Color3.fromRGB(0, 255, 0),
+	FriendCheck = true,
+	WallCheck = true,
+	TargetAll = true,
+	FOVRainbowEnabled = true,
+	FOVRainbowSpeed = 8,
+	FOVEnabled = true
+}
+
+local DrawingObjects = {}
+local AimConnection = nil
+local FOVCircle = nil
+local CurrentTarget = nil
+local CurrentFOVHue = 0
+
+local targetPlayerList = {}
+local selectedTargetIndex = 0
+
+local function GetRainbowColor(hue)
+	hue = hue % 1
+	local r, g, b
+	local i = math.floor(hue * 6)
+	local f = hue * 6 - i
+	local p = 1
+	local q = 1 - f
+	local t = f
+	if i % 6 == 0 then r, g, b = 1, t, p
+	elseif i % 6 == 1 then r, g, b = q, 1, p
+	elseif i % 6 == 2 then r, g, b = p, 1, t
+	elseif i % 6 == 3 then r, g, b = p, q, 1
+	elseif i % 6 == 4 then r, g, b = t, p, 1
+	else r, g, b = 1, p, q end
+	return Color3.new(r, g, b)
+end
+
+local function InitESP()
+	ESP_ScreenGui = Instance.new("ScreenGui")
+	ESP_ScreenGui.Name = "PlayerESP_System"
+	ESP_ScreenGui.ResetOnSpawn = false
+	ESP_ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	ESP_ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+	ESPFolder = Instance.new("Folder")
+	ESPFolder.Name = "PlayerESPFolder"
+	ESPFolder.Parent = ESP_ScreenGui
+end
+
+local function UpdateESPColors()
+	if not ESPEnabled or not ESPFolder then return end
+	for _, child in ipairs(ESPFolder:GetChildren()) do
+		if child:IsA("BillboardGui") then
+			local nameLabel = child:FindFirstChild("NameLabel")
+			if nameLabel then
+				nameLabel.TextColor3 = ESPRainbowEnabled and GetRainbowColor(CurrentESPHue) or ESPNameColor
+				nameLabel.TextSize = ESPNameSize
+			end
+		elseif child:IsA("Highlight") then
+			child.FillColor = ESPRainbowEnabled and GetRainbowColor(CurrentESPHue) or ESPBodyColor
+			child.OutlineColor = ESPRainbowEnabled and GetRainbowColor(CurrentESPHue) or ESPBodyColor
+		end
+	end
+end
+
+local function UpdateESPNameSize()
+	if not ESPEnabled or not ESPFolder then return end
+	for _, child in ipairs(ESPFolder:GetChildren()) do
+		if child:IsA("BillboardGui") then
+			local nameLabel = child:FindFirstChild("NameLabel")
+			if nameLabel then
+				nameLabel.TextSize = ESPNameSize
+			end
+		end
+	end
+end
+
+local function CreatePlayerESP(player)
+	if player == LocalPlayer or not ESPEnabled then return end
+	local character = player.Character
+	if not character then return end
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart then return end
+	local existingESP = ESPFolder:FindFirstChild(player.Name)
+	if existingESP then existingESP:Destroy() end
+	local ESPGui = Instance.new("BillboardGui")
+	ESPGui.Name = player.Name
+	ESPGui.Adornee = humanoidRootPart
+	ESPGui.Size = UDim2.new(0, 100, 0, 40)
+	ESPGui.StudsOffset = Vector3.new(0, 3, 0)
+	ESPGui.AlwaysOnTop = true
+	ESPGui.MaxDistance = 500
+	ESPGui.Enabled = true
+	ESPGui.Parent = ESPFolder
+	local NameLabel = Instance.new("TextLabel")
+	NameLabel.Size = UDim2.new(1, 0, 0.5, 0)
+	NameLabel.BackgroundTransparency = 1
+	NameLabel.Font = Enum.Font.GothamBold
+	NameLabel.TextSize = ESPNameSize
+	NameLabel.TextColor3 = ESPRainbowEnabled and GetRainbowColor(CurrentESPHue) or ESPNameColor
+	NameLabel.TextStrokeTransparency = 0.5
+	NameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+	NameLabel.Text = player.Name
+	NameLabel.Parent = ESPGui
+	local DistanceLabel = Instance.new("TextLabel")
+	DistanceLabel.Size = UDim2.new(1, 0, 0.5, 0)
+	DistanceLabel.Position = UDim2.new(0, 0, 0.5, 0)
+	DistanceLabel.BackgroundTransparency = 1
+	DistanceLabel.Font = Enum.Font.Gotham
+	DistanceLabel.TextSize = 12
+	DistanceLabel.TextColor3 = Color3.fromRGB(240, 255, 245)
+	DistanceLabel.TextStrokeTransparency = 0.5
+	DistanceLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+	DistanceLabel.Name = "DistanceLabel"
+	DistanceLabel.Parent = ESPGui
+	local Highlight = Instance.new("Highlight")
+	Highlight.Name = player.Name .. "_Highlight"
+	Highlight.Adornee = character
+	Highlight.FillColor = ESPRainbowEnabled and GetRainbowColor(CurrentESPHue) or ESPBodyColor
+	Highlight.FillTransparency = 0.7
+	Highlight.OutlineColor = ESPRainbowEnabled and GetRainbowColor(CurrentESPHue) or ESPBodyColor
+	Highlight.OutlineTransparency = 0
+	Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	Highlight.Enabled = true
+	Highlight.Parent = ESPFolder
+end
+
+local function CheckBackstabThreat()
+	if not BackstabCheckEnabled then return end
+	if BackstabCooldown > 0 then return end
+	local myCharacter = LocalPlayer.Character
+	local myHRP = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+	if not myHRP then return end
+	local myPosition = myHRP.Position
+	local myCFrame = myHRP.CFrame
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+			local humanoid = player.Character:FindFirstChild("Humanoid")
+			if hrp and humanoid and humanoid.Health > 0 then
+				local enemyPosition = hrp.Position
+				local distance = (myPosition - enemyPosition).Magnitude
+				if distance < 30 then
+					local toEnemy = (enemyPosition - myPosition).Unit
+					local myForward = myCFrame.LookVector
+					local dotProduct = toEnemy:Dot(myForward)
+					if dotProduct < 0.5 then
+						Library:Notify("偷袭警告: 小心 " .. player.Name, 5)
+						BackstabCooldown = BACKSTAB_COOLDOWN_TIME
+						break
+					end
+				end
+			end
+		end
+	end
+end
+
+local function SetupDeathDetection()
+	LocalPlayer.CharacterAdded:Connect(function(character)
+		local humanoid = character:WaitForChild("Humanoid")
+		humanoid.Died:Connect(function()
+			if DeathCheckEnabled then
+				Library:Notify("死亡提醒: 咋死了 messy帮你诅咒击杀者", 8)
+			end
+		end)
+	end)
+	if LocalPlayer.Character then
+		local humanoid = LocalPlayer.Character:FindFirstChild("Humanoid")
+		if humanoid then
+			humanoid.Died:Connect(function()
+				if DeathCheckEnabled then
+					Library:Notify("死亡提醒: 咋死了 messy帮你诅咒击杀者", 8)
+				end
+			end)
+		end
+	end
+end
+
+local function UpdateESP()
+	if not ESPEnabled then return end
+	pcall(function()
+		local myCharacter = LocalPlayer.Character
+		local myHRP = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+		if not myHRP then return end
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer then
+				local character = player.Character
+				if character then
+					local hrp = character:FindFirstChild("HumanoidRootPart")
+					if hrp then
+						local espGui = ESPFolder:FindFirstChild(player.Name)
+						if not espGui then
+							CreatePlayerESP(player)
+							espGui = ESPFolder:FindFirstChild(player.Name)
+						end
+						local distance = (myHRP.Position - hrp.Position).Magnitude
+						local distanceLabel = espGui:FindFirstChild("DistanceLabel")
+						if distanceLabel then
+							distanceLabel.Text = string.format("%.0f studs", distance)
+						end
+						if distance > 500 then
+							espGui.Enabled = false
+							local highlight = ESPFolder:FindFirstChild(player.Name .. "_Highlight")
+							if highlight then highlight.Enabled = false end
+						else
+							espGui.Enabled = true
+							local highlight = ESPFolder:FindFirstChild(player.Name .. "_Highlight")
+							if highlight then highlight.Enabled = true end
+						end
+					else
+						local espGui = ESPFolder:FindFirstChild(player.Name)
+						if espGui then espGui:Destroy() end
+						local highlight = ESPFolder:FindFirstChild(player.Name .. "_Highlight")
+						if highlight then highlight:Destroy() end
+					end
+				else
+					local esp = ESPFolder:FindFirstChild(player.Name)
+					if esp then esp:Destroy() end
+					local highlight = ESPFolder:FindFirstChild(player.Name .. "_Highlight")
+					if highlight then highlight:Destroy() end
+				end
+			end
+		end
+	end)
+end
+
+local function ToggleESP(state)
+	ESPEnabled = state
+	if state then
+		if not ESP_ScreenGui then InitESP() end
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer and player.Character then
+				CreatePlayerESP(player)
+			end
+		end
+		Library:Notify("玩家透视已开启", 3)
+	else
+		if ESPFolder then
+			for _, esp in ipairs(ESPFolder:GetChildren()) do
+				esp:Destroy()
+			end
+		end
+		Library:Notify("玩家透视已关闭", 3)
+	end
+end
+
+InitESP()
+
+LocalPlayer.CharacterAdded:Connect(function()
+	task.wait(1)
+	if ESPEnabled then
+		if ESPFolder then
+			for _, esp in ipairs(ESPFolder:GetChildren()) do
+				esp:Destroy()
+			end
+		end
+		for _, player in ipairs(Players:GetPlayers()) do
+			if player ~= LocalPlayer and player.Character then
+				CreatePlayerESP(player)
+			end
+		end
+	end
 end)
 
--- 全局状态
-getgenv().QJ_Sniper = getgenv().QJ_Sniper or {
-    SilentAim = {
-        Enabled = false,
-        HitChance = 100,
-        AimPart = "Head",
-        UsePrediction = false,
-        PredictionTime = 0.15,
-        SilentAimMode = "Raycast",
-        TeamCheck = true,
-        WallCheck = false,
-        SilentMark = false,
-    },
-    ESP = {
-        Enabled = false,
-        TeamCheck = true,
-        MaxDistance = 200,
-        FontSize = 11,
-        FadeOut = { OnDistance = true, OnDeath = false, OnLeave = false },
-        Options = {
-            Teamcheck = false, TeamcheckRGB = Color3.fromRGB(0,255,0),
-            Friendcheck = true, FriendcheckRGB = Color3.fromRGB(0,255,0),
-            Highlight = false, HighlightRGB = Color3.fromRGB(255,0,0),
-        },
-        Drawing = {
-            Chams = {
-                Enabled = true, Thermal = true,
-                FillRGB = Color3.fromRGB(119,120,255), Fill_Transparency = 100,
-                OutlineRGB = Color3.fromRGB(119,120,255), Outline_Transparency = 100,
-                VisibleCheck = true,
-            },
-            Names = { Enabled = true, RGB = Color3.fromRGB(255,255,255) },
-            Flags = { Enabled = true },
-            Distances = {
-                Enabled = true,
-                Position = "Text",
-                RGB = Color3.fromRGB(255,255,255),
-            },
-            Weapons = {
-                Enabled = true, WeaponTextRGB = Color3.fromRGB(119,120,255),
-                Outlined = false,
-                Gradient = false,
-                GradientRGB1 = Color3.fromRGB(255,255,255), GradientRGB2 = Color3.fromRGB(119,120,255),
-            },
-            Healthbar = {
-                Enabled = true,
-                HealthText = true, Lerp = false, HealthTextRGB = Color3.fromRGB(119,120,255),
-                Width = 2.5,
-                Gradient = true,
-                GradientRGB1 = Color3.fromRGB(200,0,0), GradientRGB2 = Color3.fromRGB(60,60,125), GradientRGB3 = Color3.fromRGB(119,120,255),
-            },
-            Boxes = {
-                Animate = true,
-                RotationSpeed = 300,
-                Gradient = false, GradientRGB1 = Color3.fromRGB(119,120,255), GradientRGB2 = Color3.fromRGB(0,0,0),
-                GradientFill = true, GradientFillRGB1 = Color3.fromRGB(119,120,255), GradientFillRGB2 = Color3.fromRGB(0,0,0),
-                Filled = { Enabled = true, Transparency = 0.75, RGB = Color3.fromRGB(0,0,0) },
-                Full = { Enabled = true, RGB = Color3.fromRGB(255,255,255) },
-                Corner = { Enabled = true, RGB = Color3.fromRGB(255,255,255) },
-            },
-        },
-    },
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function()
+		if ESPEnabled then
+			task.wait(1)
+			CreatePlayerESP(player)
+		end
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	if ESPFolder then
+		local espGui = ESPFolder:FindFirstChild(player.Name)
+		if espGui then espGui:Destroy() end
+		local highlight = ESPFolder:FindFirstChild(player.Name .. "_Highlight")
+		if highlight then highlight:Destroy() end
+	end
+	if CurrentTarget == player then
+		CurrentTarget = nil
+	end
+end)
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	UpdateESP()
+	if ESPRainbowEnabled then
+		CurrentESPHue = CurrentESPHue + deltaTime * ESPRainbowSpeed / 10
+		UpdateESPColors()
+	end
+	if BackstabCooldown > 0 then
+		BackstabCooldown = BackstabCooldown - deltaTime
+	end
+	CheckBackstabThreat()
+end)
+
+local function InitializeAimDrawings()
+	if not FOVCircle then
+		FOVCircle = Drawing.new("Circle")
+		FOVCircle.Visible = AimSettings.Enabled and AimSettings.FOVEnabled
+		FOVCircle.Thickness = 2
+		FOVCircle.Filled = false
+		FOVCircle.Radius = AimSettings.FOV
+		FOVCircle.Position = workspace.CurrentCamera.ViewportSize / 2
+		table.insert(DrawingObjects, FOVCircle)
+	end
+end
+
+local function UpdateFOVCircle()
+	if FOVCircle then
+		FOVCircle.Visible = AimSettings.Enabled and AimSettings.FOVEnabled
+		FOVCircle.Radius = AimSettings.FOV
+		if AimSettings.FOVRainbowEnabled then
+			FOVCircle.Color = GetRainbowColor(CurrentFOVHue)
+		else
+			FOVCircle.Color = AimSettings.FOVColor
+		end
+		FOVCircle.Position = workspace.CurrentCamera.ViewportSize / 2
+	end
+end
+
+local function CleanupDrawings()
+	for _, drawing in ipairs(DrawingObjects) do
+		if drawing then
+			drawing:Remove()
+		end
+	end
+	DrawingObjects = {}
+	FOVCircle = nil
+end
+
+local function IsFriend(player)
+	if not AimSettings.FriendCheck then
+		return false
+	end
+	local localPlayer = LocalPlayer
+	local success, result = pcall(function()
+		if localPlayer:IsFriendsWith(player.UserId) then
+			return true
+		end
+		return false
+	end)
+	return success and result
+end
+
+local function WallCheck(targetPosition, targetCharacter)
+	if not AimSettings.WallCheck then
+		return true
+	end
+	local camera = workspace.CurrentCamera
+	local origin = camera.CFrame.Position
+	local direction = (targetPosition - origin).Unit
+	local distance = (targetPosition - origin).Magnitude
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {LocalPlayer.Character, targetCharacter}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+	raycastParams.IgnoreWater = true
+	raycastParams.CollisionGroup = "Default"
+	local raycastResult = workspace:Raycast(origin, direction * distance, raycastParams)
+	return raycastResult == nil
+end
+
+local function GetClosestPlayer()
+	local camera = workspace.CurrentCamera
+	local mousePos = camera.ViewportSize / 2
+	local nearestPlayer = nil
+	local shortestDistance = AimSettings.FOV
+
+	if not AimSettings.TargetAll and AimSettings.TargetPlayer then
+		local target = Players:FindFirstChild(AimSettings.TargetPlayer)
+		if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+			local humanoid = target.Character:FindFirstChild("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				local targetPos = target.Character.HumanoidRootPart.Position
+				local screenPos, onScreen = camera:WorldToViewportPoint(targetPos)
+				if onScreen then
+					local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+					if distance <= AimSettings.FOV and WallCheck(targetPos, target.Character) then
+						if not IsFriend(target) then
+							CurrentTarget = target
+							return target
+						end
+					end
+				end
+			end
+		end
+		CurrentTarget = nil
+		return nil
+	end
+
+	if CurrentTarget and CurrentTarget ~= LocalPlayer and CurrentTarget.Character then
+		local hrp = CurrentTarget.Character:FindFirstChild("HumanoidRootPart")
+		local humanoid = CurrentTarget.Character:FindFirstChild("Humanoid")
+		if hrp and humanoid and humanoid.Health > 0 then
+			local screenPos, onScreen = camera:WorldToViewportPoint(hrp.Position)
+			if onScreen then
+				local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+				if distance <= AimSettings.FOV and WallCheck(hrp.Position, CurrentTarget.Character) then
+					if not IsFriend(CurrentTarget) then
+						return CurrentTarget
+					end
+				end
+			end
+		end
+	end
+
+	CurrentTarget = nil
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character then
+			if not IsFriend(player) then
+				local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+				local humanoid = player.Character:FindFirstChild("Humanoid")
+				if humanoidRootPart and humanoid and humanoid.Health > 0 then
+					if WallCheck(humanoidRootPart.Position, player.Character) then
+						local screenPos, onScreen = camera:WorldToViewportPoint(humanoidRootPart.Position)
+						if onScreen then
+							local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+							if distance < shortestDistance then
+								shortestDistance = distance
+								nearestPlayer = player
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	if nearestPlayer then
+		CurrentTarget = nearestPlayer
+	end
+	return nearestPlayer
+end
+
+local function AimBot()
+	if not AimSettings.Enabled then
+		return
+	end
+	local camera = workspace.CurrentCamera
+	local target = GetClosestPlayer()
+	if target and target.Character then
+		local humanoidRootPart = target.Character:FindFirstChild("HumanoidRootPart")
+		local head = target.Character:FindFirstChild("Head")
+		if humanoidRootPart and head then
+			local targetVelocity = humanoidRootPart.Velocity
+			local targetPosition = head.Position
+			if AimSettings.CrosshairDistance > 0 then
+				local distance = (targetPosition - camera.CFrame.Position).Magnitude
+				local timeToTarget = distance / 1000
+				targetPosition = targetPosition + (targetVelocity * timeToTarget * AimSettings.CrosshairDistance)
+			end
+			local currentCFrame = camera.CFrame
+			local targetCFrame = CFrame.new(currentCFrame.Position, targetPosition)
+			local smoothedCFrame = currentCFrame:Lerp(targetCFrame, 1 / AimSettings.Smoothness)
+			camera.CFrame = smoothedCFrame
+		end
+	end
+end
+
+local function CreateRainbowUI()
+	if RainbowUIScreenGui then
+		RainbowUIScreenGui:Destroy()
+		RainbowUIScreenGui = nil
+	end
+	local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+	RainbowUIScreenGui = Instance.new("ScreenGui")
+	RainbowUIScreenGui.Name = "RainbowCircleUI"
+	RainbowUIScreenGui.ResetOnSpawn = false
+	RainbowUIScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+	RainbowUIScreenGui.DisplayOrder = 99999
+	RainbowUIScreenGui.IgnoreGuiInset = true
+	RainbowUIScreenGui.Enabled = true
+	RainbowUIScreenGui.Parent = playerGui
+	local mainFrame = Instance.new("Frame")
+	mainFrame.Name = "RainbowCircle"
+	mainFrame.Size = UDim2.new(0, 80, 0, 80)
+	mainFrame.Position = UDim2.new(0, 10, 0, 10)
+	mainFrame.BackgroundTransparency = 1
+	mainFrame.ZIndex = 100000
+	mainFrame.Parent = RainbowUIScreenGui
+	mainFrame.Active = true
+	mainFrame.Selectable = true
+	mainFrame.Draggable = false
+	local uiCorner = Instance.new("UICorner")
+	uiCorner.CornerRadius = UDim.new(1, 0)
+	uiCorner.Parent = mainFrame
+	local rainbowBackground = Instance.new("Frame")
+	rainbowBackground.Name = "RainbowBackground"
+	rainbowBackground.Size = UDim2.new(1, 0, 1, 0)
+	rainbowBackground.Position = UDim2.new(0, 0, 0, 0)
+	rainbowBackground.BackgroundTransparency = 0
+	rainbowBackground.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+	rainbowBackground.ZIndex = 100001
+	rainbowBackground.Parent = mainFrame
+	rainbowBackground.Active = true
+	rainbowBackground.Selectable = true
+	local rainbowCorner = Instance.new("UICorner")
+	rainbowCorner.CornerRadius = UDim.new(1, 0)
+	rainbowCorner.Parent = rainbowBackground
+	local rainbowStroke = Instance.new("UIStroke")
+	rainbowStroke.Name = "RainbowStroke"
+	rainbowStroke.Color = Color3.fromRGB(255, 255, 255)
+	rainbowStroke.Thickness = 3
+	rainbowStroke.Transparency = 0
+	rainbowStroke.Parent = mainFrame
+	local innerStroke = Instance.new("UIStroke")
+	innerStroke.Name = "InnerStroke"
+	innerStroke.Color = Color3.fromRGB(0, 0, 0)
+	innerStroke.Thickness = 1
+	innerStroke.Transparency = 0.3
+	innerStroke.Parent = rainbowBackground
+	StatusIndicator = Instance.new("Frame")
+	StatusIndicator.Name = "StatusIndicator"
+	StatusIndicator.Size = UDim2.new(0, 15, 0, 15)
+	StatusIndicator.Position = UDim2.new(1, -18, 1, -18)
+	StatusIndicator.BackgroundColor3 = AimSettings.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+	StatusIndicator.BackgroundTransparency = 0
+	StatusIndicator.ZIndex = 100002
+	StatusIndicator.Parent = mainFrame
+	local indicatorCorner = Instance.new("UICorner")
+	indicatorCorner.CornerRadius = UDim.new(1, 0)
+	indicatorCorner.Parent = StatusIndicator
+	local indicatorStroke = Instance.new("UIStroke")
+	indicatorStroke.Color = Color3.fromRGB(255, 255, 255)
+	indicatorStroke.Thickness = 2
+	indicatorStroke.Parent = StatusIndicator
+	local statusText = Instance.new("TextLabel")
+	statusText.Name = "StatusText"
+	statusText.Size = UDim2.new(1, 0, 0, 25)
+	statusText.Position = UDim2.new(0, 0, 1, 5)
+	statusText.BackgroundTransparency = 1
+	statusText.Text = AimSettings.Enabled and "自瞄开" or "自瞄关"
+	statusText.TextColor3 = Color3.fromRGB(255, 255, 255)
+	statusText.TextSize = 14
+	statusText.Font = Enum.Font.GothamBold
+	statusText.TextStrokeTransparency = 0.3
+	statusText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	statusText.TextStrokeTransparency = 0.3
+	statusText.ZIndex = 100002
+	statusText.Parent = mainFrame
+	local clickArea = Instance.new("TextButton")
+	clickArea.Name = "ClickArea"
+	clickArea.Size = UDim2.new(1, 0, 1, 0)
+	clickArea.Position = UDim2.new(0, 0, 0, 0)
+	clickArea.BackgroundTransparency = 1
+	clickArea.Text = ""
+	clickArea.ZIndex = 100003
+	clickArea.Parent = mainFrame
+	local rainbowColors = {
+		Color3.fromRGB(255, 0, 0),
+		Color3.fromRGB(255, 95, 0),
+		Color3.fromRGB(255, 165, 0),
+		Color3.fromRGB(255, 215, 0),
+		Color3.fromRGB(255, 255, 0),
+		Color3.fromRGB(144, 238, 144),
+		Color3.fromRGB(0, 255, 0),
+		Color3.fromRGB(0, 200, 200),
+		Color3.fromRGB(0, 0, 255),
+		Color3.fromRGB(75, 0, 130),
+		Color3.fromRGB(138, 43, 226),
+		Color3.fromRGB(148, 0, 211),
+		Color3.fromRGB(199, 21, 133),
+		Color3.fromRGB(255, 20, 147)
+	}
+	local rainbowColors2 = {
+		Color3.fromRGB(255, 0, 0),
+		Color3.fromRGB(255, 127, 0),
+		Color3.fromRGB(255, 255, 0),
+		Color3.fromRGB(0, 255, 0),
+		Color3.fromRGB(0, 0, 255),
+		Color3.fromRGB(75, 0, 130),
+		Color3.fromRGB(148, 0, 211)
+	}
+	local timeOffset = 0
+	local hoverAmplitude = 4
+	local hoverSpeed = 4
+	local pulseSpeed = 2
+	local pulseAmount = 0.1
+	local colorIndex = 1
+	local colorIndex2 = 3
+	local transitionTime = 0.8
+	local transitionTime2 = 0.5
+	local elapsedTime = 0
+	local elapsedTime2 = 0
+	local pulseScale = 1
+	local isPulsingOut = true
+	if animationConnection then
+		animationConnection:Disconnect()
+	end
+	animationConnection = RunService.RenderStepped:Connect(function(deltaTime)
+		if not RainbowUIEnabled or not RainbowUIScreenGui or not RainbowUIScreenGui.Parent then
+			animationConnection:Disconnect()
+			animationConnection = nil
+			return
+		end
+		elapsedTime = elapsedTime + deltaTime
+		if elapsedTime >= transitionTime then
+			elapsedTime = 0
+			colorIndex = colorIndex + 1
+			if colorIndex > #rainbowColors then
+				colorIndex = 1
+			end
+		end
+		local nextColorIndex = colorIndex + 1
+		if nextColorIndex > #rainbowColors then
+			nextColorIndex = 1
+		end
+		local alpha = elapsedTime / transitionTime
+		local currentBgColor = rainbowColors[colorIndex]:Lerp(rainbowColors[nextColorIndex], alpha)
+		rainbowBackground.BackgroundColor3 = currentBgColor
+		elapsedTime2 = elapsedTime2 + deltaTime
+		if elapsedTime2 >= transitionTime2 then
+			elapsedTime2 = 0
+			colorIndex2 = colorIndex2 + 1
+			if colorIndex2 > #rainbowColors2 then
+				colorIndex2 = 1
+			end
+		end
+		local nextColorIndex2 = colorIndex2 + 1
+		if nextColorIndex2 > #rainbowColors2 then
+			nextColorIndex2 = 1
+		end
+		local alpha2 = elapsedTime2 / transitionTime2
+		local currentStrokeColor = rainbowColors2[colorIndex2]:Lerp(rainbowColors2[nextColorIndex2], alpha2)
+		rainbowStroke.Color = currentStrokeColor
+		if isPulsingOut then
+			pulseScale = pulseScale + deltaTime * pulseSpeed * pulseAmount
+			if pulseScale >= 1 + pulseAmount then
+				isPulsingOut = false
+			end
+		else
+			pulseScale = pulseScale - deltaTime * pulseSpeed * pulseAmount
+			if pulseScale <= 1 - pulseAmount then
+				isPulsingOut = true
+			end
+		end
+		rainbowBackground.Size = UDim2.new(pulseScale, 0, pulseScale, 0)
+		rainbowBackground.Position = UDim2.new((1 - pulseScale) / 2, 0, (1 - pulseScale) / 2, 0)
+		timeOffset = timeOffset + deltaTime * hoverSpeed
+		local hoverOffset = math.sin(timeOffset) * hoverAmplitude
+		mainFrame.Position = UDim2.new(0, 10, 0, 10 + hoverOffset)
+		innerStroke.Transparency = 0.2 + 0.3 * math.sin(timeOffset * 2)
+		if StatusIndicator then
+			StatusIndicator.BackgroundColor3 = AimSettings.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+		end
+		if statusText then
+			statusText.Text = AimSettings.Enabled and "自瞄开" or "自瞄关"
+			statusText.TextColor3 = AimSettings.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 100, 100)
+		end
+	end)
+	local function handleClick()
+		AimSettings.Enabled = not AimSettings.Enabled
+		if AimSettings.Enabled then
+			InitializeAimDrawings()
+			UpdateFOVCircle()
+			if AimConnection then
+				AimConnection:Disconnect()
+			end
+			AimConnection = RunService.RenderStepped:Connect(function(deltaTime)
+				if AimSettings.FOVRainbowEnabled then
+					CurrentFOVHue = CurrentFOVHue + deltaTime * AimSettings.FOVRainbowSpeed / 10
+				end
+				UpdateFOVCircle()
+				AimBot()
+			end)
+		else
+			if AimConnection then
+				AimConnection:Disconnect()
+				AimConnection = nil
+			end
+			CleanupDrawings()
+			CurrentTarget = nil
+		end
+		if StatusIndicator then
+			StatusIndicator.BackgroundColor3 = AimSettings.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+		end
+		if statusText then
+			statusText.Text = AimSettings.Enabled and "自瞄开" or "自瞄关"
+			statusText.TextColor3 = AimSettings.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 100, 100)
+		end
+		local originalSize = rainbowBackground.Size
+		local originalPosition = rainbowBackground.Position
+		local tweenInfo1 = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local tweenInfo2 = TweenInfo.new(0.15, Enum.EasingStyle.Bounce, Enum.EasingDirection.Out)
+		local clickScaleUp = TweenService:Create(rainbowBackground, tweenInfo1, {
+			Size = originalSize * 0.7,
+			Position = UDim2.new(0.15, 0, 0.15, 0)
+		})
+		local clickScaleDown = TweenService:Create(rainbowBackground, tweenInfo2, {
+			Size = originalSize,
+			Position = originalPosition
+		})
+		local originalStrokeColor = rainbowStroke.Color
+		local flashTween = TweenService:Create(rainbowStroke, tweenInfo1, {
+			Color = Color3.fromRGB(255, 255, 255)
+		})
+		local revertStroke = TweenService:Create(rainbowStroke, tweenInfo2, {
+			Color = originalStrokeColor
+		})
+		clickScaleUp:Play()
+		flashTween:Play()
+		clickScaleUp.Completed:Connect(function()
+			clickScaleDown:Play()
+			revertStroke:Play()
+		end)
+	end
+	clickArea.MouseButton1Click:Connect(handleClick)
+	mainFrame.MouseButton1Click:Connect(handleClick)
+	mainFrame.MouseEnter:Connect(function()
+		local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local tween1 = TweenService:Create(rainbowStroke, tweenInfo, {
+			Thickness = 6
+		})
+		pulseAmount = 0.15
+		tween1:Play()
+	end)
+	mainFrame.MouseLeave:Connect(function()
+		local tweenInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local tween1 = TweenService:Create(rainbowStroke, tweenInfo, {
+			Thickness = 3
+		})
+		pulseAmount = 0.1
+		tween1:Play()
+	end)
+	rainbowBackground.BackgroundTransparency = 1
+	rainbowStroke.Transparency = 1
+	local fadeIn = TweenService:Create(rainbowBackground, TweenInfo.new(0.5), {
+		BackgroundTransparency = 0
+	})
+	local strokeFadeIn = TweenService:Create(rainbowStroke, TweenInfo.new(0.5), {
+		Transparency = 0
+	})
+	task.wait(0.2)
+	fadeIn:Play()
+	strokeFadeIn:Play()
+	return true
+end
+
+local function ToggleRainbowUI(state)
+	RainbowUIEnabled = state
+	if state then
+		local success = CreateRainbowUI()
+		if success then
+			Library:Notify("自瞄快捷UI已开启", 3)
+		end
+	else
+		if RainbowUIScreenGui then
+			RainbowUIScreenGui:Destroy()
+			RainbowUIScreenGui = nil
+		end
+		Library:Notify("自瞄快捷UI已隐藏", 3)
+	end
+end
+
+local Window = Library:CreateWindow({
+	Title = "QJ脚本",
+	Footer = "作者：琼玖",
+	Icon = 131153193945220,
+	NotifySide = "Right",
+	ShowCustomCursor = true,
+})
+
+Library:Notify("琼玖脚本已加载", 5)
+
+local Tabs = {
+	Player = Window:AddTab("本地玩家", "user"),
+	Aim = Window:AddTab("自瞄", "crosshair"),
+	Other = Window:AddTab("透视", "settings"),
+	Settings = Window:AddTab("设置", "settings"),
 }
-local STATE = getgenv().QJ_Sniper
 
-local function setupInputSpoof()
-    local UserInputService = game:GetService("UserInputService")
-    pcall(function()
-        local mt = getrawmetatable(UserInputService)
-        if mt then
-            local originalIndex = mt.__index
-            setreadonly(mt, false)
-            mt.__index = function(self, key)
-                if self == UserInputService then
-                    if key == "TouchEnabled" then return true end
-                    if key == "MouseEnabled" or key == "KeyboardEnabled" then return false end
-                end
-                return originalIndex(self, key)
-            end
-            setreadonly(mt, true)
-        end
-    end)
+local PlayerLeft = Tabs.Player:AddLeftGroupbox("移动增强")
+PlayerLeft:AddToggle('InfiniteJumpToggle', {
+	Text = '无限跳跃',
+	Default = false,
+	Tooltip = '按住空格可连续跳跃',
+	Callback = function(Value)
+		InfiniteJumpEnabled = Value
+		if Value then
+			if JumpConnection then
+				JumpConnection:Disconnect()
+			end
+			JumpConnection = UserInputService.JumpRequest:Connect(function()
+				local char = LocalPlayer.Character
+				if char and char:FindFirstChild("Humanoid") then
+					char.Humanoid:ChangeState("Jumping")
+				end
+			end)
+			Library:Notify("无限跳跃已开启", 2)
+		else
+			if JumpConnection then
+				JumpConnection:Disconnect()
+				JumpConnection = nil
+			end
+			Library:Notify("无限跳跃已关闭", 2)
+		end
+	end
+})
+
+PlayerLeft:AddSlider('GravitySlider', {
+	Text = '重力值',
+	Default = 196,
+	Min = 0,
+	Max = 500,
+	Rounding = 0,
+	Suffix = "",
+	Callback = function(Value)
+		workspace.Gravity = Value
+		Library:Notify("重力已设置为: " .. Value, 2)
+	end
+})
+
+PlayerLeft:AddSlider('SpeedValueSlider', {
+	Text = '跑步速度倍率',
+	Default = 1,
+	Min = 1,
+	Max = 50,
+	Rounding = 0,
+	Suffix = "",
+	Callback = function(Value)
+		SpeedValue = Value
+	end
+})
+
+PlayerLeft:AddToggle('SpeedToggle', {
+	Text = '开启快速跑步',
+	Default = false,
+	Tooltip = '使用设定的速度倍率',
+	Callback = function(Value)
+		SpeedEnabled = Value
+		if Value then
+			if SpeedConnection then
+				SpeedConnection:Disconnect()
+			end
+			SpeedConnection = RunService.Heartbeat:Connect(function()
+				local player = LocalPlayer
+				local char = player.Character
+				if char and char:FindFirstChild("Humanoid") then
+					local humanoid = char.Humanoid
+					if humanoid.MoveDirection.Magnitude > 0 then
+						char:TranslateBy(humanoid.MoveDirection * SpeedValue / 2)
+					end
+				end
+			end)
+		else
+			if SpeedConnection then
+				SpeedConnection:Disconnect()
+				SpeedConnection = nil
+			end
+		end
+	end
+})
+
+local PlayerRight = Tabs.Player:AddRightGroupbox("其他")
+PlayerRight:AddToggle('NightVisionToggle', {
+	Text = '夜视模式',
+	Default = false,
+	Callback = function(Value)
+		NightVisionEnabled = Value
+		if Value then
+			originalBrightness = Lighting.Brightness
+			originalAmbient = Lighting.Ambient
+			Lighting.Brightness = 2
+			Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+			Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+			Library:Notify("夜视模式已开启", 2)
+		else
+			Lighting.Brightness = originalBrightness
+			Lighting.Ambient = originalAmbient
+			Lighting.OutdoorAmbient = Color3.fromRGB(0.5, 0.5, 0.5)
+			Library:Notify("夜视模式已关闭", 2)
+		end
+	end
+})
+
+local AimLeft = Tabs.Aim:AddLeftGroupbox("自瞄控制")
+AimLeft:AddToggle('AimEnabled', {
+	Text = '启用自瞄',
+	Default = false,
+	Callback = function(Value)
+		AimSettings.Enabled = Value
+		if Value then
+			InitializeAimDrawings()
+			UpdateFOVCircle()
+			if AimConnection then
+				AimConnection:Disconnect()
+			end
+			AimConnection = RunService.RenderStepped:Connect(function(deltaTime)
+				if AimSettings.FOVRainbowEnabled then
+					CurrentFOVHue = CurrentFOVHue + deltaTime * AimSettings.FOVRainbowSpeed / 10
+				end
+				UpdateFOVCircle()
+				AimBot()
+			end)
+			Library:Notify("自瞄已开启", 2)
+		else
+			if AimConnection then
+				AimConnection:Disconnect()
+				AimConnection = nil
+			end
+			CleanupDrawings()
+			CurrentTarget = nil
+			Library:Notify("自瞄已关闭", 2)
+		end
+		if StatusIndicator then
+			StatusIndicator.BackgroundColor3 = AimSettings.Enabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+		end
+	end
+})
+
+AimLeft:AddToggle('RainbowUIToggle', {
+	Text = '自瞄快捷UI',
+	Default = false,
+	Callback = function(Value)
+		ToggleRainbowUI(Value)
+	end
+})
+
+AimLeft:AddToggle('FOVEnabledToggle', {
+	Text = 'FOV开关',
+	Default = true,
+	Callback = function(Value)
+		AimSettings.FOVEnabled = Value
+		UpdateFOVCircle()
+	end
+})
+
+AimLeft:AddToggle('FOVRainbowToggle', {
+	Text = 'FOV彩虹效果',
+	Default = true,
+	Callback = function(Value)
+		AimSettings.FOVRainbowEnabled = Value
+		UpdateFOVCircle()
+	end
+})
+
+AimLeft:AddSlider('FOVRainbowSpeedSlider', {
+	Text = 'FOV彩虹速度',
+	Default = 8,
+	Min = 1,
+	Max = 20,
+	Rounding = 0,
+	Callback = function(Value)
+		AimSettings.FOVRainbowSpeed = Value
+	end
+})
+
+AimLeft:AddSlider('AimFOVSlider', {
+	Text = '自瞄范围(FOV)',
+	Default = 100,
+	Min = 50,
+	Max = 500,
+	Rounding = 0,
+	Callback = function(Value)
+		AimSettings.FOV = Value
+		UpdateFOVCircle()
+	end
+})
+
+AimLeft:AddSlider('SmoothnessSlider', {
+	Text = '自瞄平滑度',
+	Default = 10,
+	Min = 1,
+	Max = 50,
+	Rounding = 0,
+	Callback = function(Value)
+		AimSettings.Smoothness = Value
+	end
+})
+
+AimLeft:AddSlider('CrosshairSlider', {
+	Text = '预判距离',
+	Default = 5,
+	Min = 0,
+	Max = 20,
+	Rounding = 0,
+	Callback = function(Value)
+		AimSettings.CrosshairDistance = Value
+	end
+})
+
+AimLeft:AddToggle('FriendCheckToggle', {
+	Text = '好友检测',
+	Default = true,
+	Callback = function(Value)
+		AimSettings.FriendCheck = Value
+	end
+})
+
+AimLeft:AddToggle('WallCheckToggle', {
+	Text = '墙壁检测',
+	Default = true,
+	Callback = function(Value)
+		AimSettings.WallCheck = Value
+	end
+})
+
+AimLeft:AddToggle('TargetModeToggle', {
+	Text = '目标自瞄模式',
+	Default = false,
+	Callback = function(Value)
+		AimSettings.TargetAll = not Value
+		CurrentTarget = nil
+		if Value then
+			Library:Notify("已切换至目标模式，请使用下方按钮选择玩家", 3)
+		else
+			Library:Notify("已切换至全部玩家模式", 3)
+		end
+	end
+})
+
+targetPlayerList = {}
+for _, player in ipairs(Players:GetPlayers()) do
+	if player ~= LocalPlayer then
+		table.insert(targetPlayerList, player.Name)
+	end
 end
-setupInputSpoof()
+Players.PlayerAdded:Connect(function(player)
+	table.insert(targetPlayerList, player.Name)
+end)
+Players.PlayerRemoving:Connect(function(player)
+	for i, name in ipairs(targetPlayerList) do
+		if name == player.Name then
+			table.remove(targetPlayerList, i)
+			break
+		end
+	end
+	if AimSettings.TargetPlayer == player.Name then
+		AimSettings.TargetPlayer = nil
+		CurrentTarget = nil
+	end
+end)
 
--- 静默自瞄核心
-local silentAimActive = false
-local silentAimConnections = {}
-local silentAimTarget = nil
-local silentAimDecorations = {}
-local silentAimOriginalRaycast = nil
-local silentAimOriginalSpawnBullet = nil
-local silentMarkActive = false
-local silentMarkGuis = {}
-local markUpdateThread = nil
-local reinitThread = nil
+AimLeft:AddButton('下一个目标', function()
+	if AimSettings.TargetAll then
+		Library:Notify("请先开启目标自瞄模式", 3)
+		return
+	end
+	if #targetPlayerList == 0 then
+		Library:Notify("没有可选择的玩家", 3)
+		return
+	end
+	selectedTargetIndex = (selectedTargetIndex % #targetPlayerList) + 1
+	AimSettings.TargetPlayer = targetPlayerList[selectedTargetIndex]
+	CurrentTarget = nil
+	Library:Notify("已选择目标: " .. AimSettings.TargetPlayer, 3)
+end)
 
-local silentAimConfig = {
-    fov_range = 900,
-    marker_chance = 10,
-    rotation_chance = 100,
-    path_adjust = true,
-    proximity_limit = 300,
-    assist_size = 4.0,
-}
+local AimRight = Tabs.Aim:AddRightGroupbox("快速设置")
+AimRight:AddButton('近距离(强锁)', function()
+	AimSettings.FOV = 80
+	AimSettings.Smoothness = 1
+	AimSettings.CrosshairDistance = 0
+	UpdateFOVCircle()
+	Library:Notify("已应用近距离设置", 2)
+end)
+AimRight:AddButton('中距离(小强锁)', function()
+	AimSettings.FOV = 120
+	AimSettings.Smoothness = 4
+	AimSettings.CrosshairDistance = 2
+	UpdateFOVCircle()
+	Library:Notify("已应用中距离设置", 2)
+end)
+AimRight:AddButton('远距离', function()
+	AimSettings.FOV = 130
+	AimSettings.Smoothness = 5
+	AimSettings.CrosshairDistance = 3
+	UpdateFOVCircle()
+	Library:Notify("已应用远距离设置", 2)
+end)
 
-local fovCircle = Drawing.new("Circle")
-fovCircle.Visible = false
-fovCircle.Thickness = 1
-fovCircle.Radius = silentAimConfig.fov_range
-fovCircle.Transparency = 0.7
-fovCircle.Color = Color3.fromRGB(255, 255, 255)
-fovCircle.Filled = false
-fovCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
+local OtherLeft = Tabs.Other:AddLeftGroupbox("ESP设置")
+OtherLeft:AddToggle('ESPToggle', {
+	Text = '玩家透视(ESP)',
+	Default = false,
+	Callback = function(Value)
+		ToggleESP(Value)
+	end
+})
+OtherLeft:AddSlider('ESPNameSizeSlider', {
+	Text = '名字大小',
+	Default = 14,
+	Min = 8,
+	Max = 24,
+	Rounding = 0,
+	Callback = function(Value)
+		ESPNameSize = Value
+		if ESPEnabled then
+			UpdateESPNameSize()
+		end
+	end
+})
+OtherLeft:AddToggle('ESPRainbowToggle', {
+	Text = '彩虹渐变',
+	Default = false,
+	Callback = function(Value)
+		ESPRainbowEnabled = Value
+		if ESPEnabled then
+			UpdateESPColors()
+		end
+	end
+})
+OtherLeft:AddSlider('ESPRainbowSpeedSlider', {
+	Text = '彩虹速度',
+	Default = 5,
+	Min = 1,
+	Max = 10,
+	Rounding = 0,
+	Callback = function(Value)
+		ESPRainbowSpeed = Value
+	end
+})
+OtherLeft:AddToggle('BackstabToggle', {
+	Text = '偷袭检测提醒',
+	Default = false,
+	Callback = function(Value)
+		BackstabCheckEnabled = Value
+		Library:Notify(Value and "偷袭检测已开启" or "偷袭检测已关闭", 2)
+	end
+})
+OtherLeft:AddToggle('DeathCheckToggle', {
+	Text = '死亡提醒',
+	Default = false,
+	Callback = function(Value)
+		DeathCheckEnabled = Value
+		if Value then
+			SetupDeathDetection()
+		end
+		Library:Notify(Value and "死亡提醒已开启" or "死亡提醒已关闭", 2)
+	end
+})
+OtherLeft:AddToggle('NightVisionToggle2', {
+	Text = '夜视模式',
+	Default = false,
+	Callback = function(Value)
+		NightVisionEnabled = Value
+		if Value then
+			originalBrightness = Lighting.Brightness
+			originalAmbient = Lighting.Ambient
+			Lighting.Brightness = 2
+			Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+			Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+			Library:Notify("夜视模式已开启", 2)
+		else
+			Lighting.Brightness = originalBrightness
+			Lighting.Ambient = originalAmbient
+			Lighting.OutdoorAmbient = Color3.fromRGB(0.5, 0.5, 0.5)
+			Library:Notify("夜视模式已关闭", 2)
+		end
+	end
+})
 
-local targetDot = Drawing.new("Circle")
-targetDot.Visible = false
-targetDot.Thickness = 1
-targetDot.Radius = 4
-targetDot.Color = Color3.fromRGB(255, 0, 0)
-targetDot.Filled = true
+local SettingsGroup = Tabs.Settings:AddLeftGroupbox("菜单")
+SettingsGroup:AddButton('卸载脚本', function()
+	ESPEnabled = false
+	if ESPFolder then
+		for _, esp in ipairs(ESPFolder:GetChildren()) do
+			esp:Destroy()
+		end
+	end
+	if AimConnection then
+		AimConnection:Disconnect()
+	end
+	CleanupDrawings()
+	if JumpConnection then
+		JumpConnection:Disconnect()
+	end
+	if SpeedConnection then
+		SpeedConnection:Disconnect()
+	end
+	if animationConnection then
+		animationConnection:Disconnect()
+	end
+	if RainbowUIScreenGui then
+		RainbowUIScreenGui:Destroy()
+	end
+	Library:Unload()
+end)
 
--- 查找根部件
-local function findRootPart(character, timeout)
-    timeout = timeout or 0
-    local parts = {"HumanoidRootPart", "Torso", "UpperTorso", "LowerTorso", "Head"}
-    local start = tick()
-    repeat
-        for _, name in ipairs(parts) do
-            local part = character:FindFirstChild(name)
-            if part and part:IsA("BasePart") then
-                return part
-            end
-        end
-        if timeout > 0 and tick() - start > timeout then break end
-        task.wait(0.2)
-    until false
-    return nil
-end
+SettingsGroup:AddLabel('菜单快捷键'):AddKeyPicker('MenuKeybind', {
+	Default = 'RightShift',
+	NoUI = true,
+	Text = 'Menu keybind'
+})
 
-local function createDecoration(character)
-    if not character or not character.Parent then return nil end
-    local rootPart = findRootPart(character, 5)
-    if not rootPart then return nil end
+Library.ToggleKeybind = Options.MenuKeybind
 
-    if silentAimDecorations[character] and silentAimDecorations[character].Parent then
-        silentAimDecorations[character]:Destroy()
-    end
-
-    local decoration = Instance.new("Part")
-    local names = {"EffectNode", "ParticleAnchor", "SoundSource", "LightNode", "TrailStart"}
-    decoration.Name = names[math.random(1, #names)]
-    decoration.Size = Vector3.new(8, 8, 8) * silentAimConfig.assist_size
-    decoration.CFrame = rootPart.CFrame
-    decoration.Anchored = false
-    decoration.CanCollide = false
-    decoration.CanTouch = false
-    decoration.CanQuery = true
-    decoration.Transparency = 1
-    decoration.Parent = character
-
-    local weld = Instance.new("WeldConstraint")
-    weld.Part0 = rootPart
-    weld.Part1 = decoration
-    weld.Parent = decoration
-
-    silentAimDecorations[character] = decoration
-    return decoration
-end
-
-local function removeDecoration(character)
-    if silentAimDecorations[character] then
-        silentAimDecorations[character]:Destroy()
-        silentAimDecorations[character] = nil
-    end
-end
-
--- 标记GUI
-local function createMarkGui(character, hasMark)
-    if not character then return nil end
-    local head = character:FindFirstChild("Head")
-    if not head then return nil end
-    if silentMarkGuis[character] then
-        pcall(function() silentMarkGuis[character].gui:Destroy() end)
-        silentMarkGuis[character] = nil
-    end
-    local gui = Instance.new("BillboardGui")
-    gui.Name = "SilentMark"
-    gui.Adornee = head
-    gui.Size = UDim2.new(0, 100, 0, 30)
-    gui.StudsOffset = Vector3.new(0, 2, 0)
-    gui.AlwaysOnTop = true
-    gui.LightInfluence = 0
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = head
-    local text = Instance.new("TextLabel")
-    text.Name = "Text"
-    text.Parent = gui
-    text.BackgroundTransparency = 1
-    text.Size = UDim2.new(1, 0, 1, 0)
-    text.Font = Enum.Font.GothamBold
-    text.TextSize = 16
-    if hasMark then
-        text.TextColor3 = Color3.fromRGB(0, 255, 0)
-        text.Text = "[已标记]"
-    else
-        text.TextColor3 = Color3.fromRGB(255, 0, 0)
-        text.Text = "[无法锁定]"
-    end
-    text.TextStrokeTransparency = 0.5
-    text.TextStrokeColor3 = Color3.new(0, 0, 0)
-    silentMarkGuis[character] = {gui = gui, text = text}
-    return gui
-end
-
-local function removeMarkGui(character)
-    if silentMarkGuis[character] then
-        pcall(function() silentMarkGuis[character].gui:Destroy() end)
-        silentMarkGuis[character] = nil
-    end
-end
-
-local function updateAllMarks()
-    if not silentMarkActive then
-        for char, _ in pairs(silentMarkGuis) do
-            pcall(function() silentMarkGuis[char].gui:Destroy() end)
-        end
-        silentMarkGuis = {}
-        return
-    end
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local char = player.Character
-            if char then
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid and humanoid.Health > 0 then
-                    local hasMark = silentAimDecorations[char] ~= nil
-                    if hasMark then
-                        if not silentMarkGuis[char] then
-                            createMarkGui(char, true)
-                        end
-                    else
-                        if not silentMarkGuis[char] then
-                            createMarkGui(char, false)
-                        end
-                    end
-                else
-                    if silentMarkGuis[char] then
-                        removeMarkGui(char)
-                    end
-                end
-            end
-        end
-    end
-end
-
-local function markUpdateLoop()
-    while silentMarkActive do
-        pcall(updateAllMarks)
-        task.wait(0.5)
-    end
-end
-
-local function reinitAllDecorations()
-    while silentAimActive do
-        pcall(function()
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local char = player.Character
-                    local humanoid = char:FindFirstChildOfClass("Humanoid")
-                    if humanoid and humanoid.Health > 0 then
-                        if not silentAimDecorations[char] or not silentAimDecorations[char].Parent then
-                            createDecoration(char)
-                        end
-                    else
-                        removeDecoration(char)
-                    end
-                end
-            end
-        end)
-        task.wait(3)
-    end
-end
-
-local function setupPlayerSupport(player)
-    if player == LocalPlayer then return end
-    local function handleCharacter(char)
-        if not char then return end
-        if char.Parent and silentAimActive then
-            createDecoration(char)
-        end
-        local humanoid = char:WaitForChild("Humanoid", 1)
-        if humanoid then
-            local diedConn = humanoid.Died:Connect(function()
-                removeDecoration(char)
-                if silentMarkActive then removeMarkGui(char) end
-            end)
-            table.insert(silentAimConnections, diedConn)
-            local healthConn = humanoid.HealthChanged:Connect(function(newHealth)
-                if newHealth > 0 and humanoid.Health > 0 then
-                    if not silentAimDecorations[char] then createDecoration(char) end
-                end
-            end)
-            table.insert(silentAimConnections, healthConn)
-        end
-    end
-    if player.Character then handleCharacter(player.Character) end
-    local addedConn = player.CharacterAdded:Connect(handleCharacter)
-    local removingConn = player.CharacterRemoving:Connect(function(char)
-        removeDecoration(char)
-        if silentMarkActive then removeMarkGui(char) end
-    end)
-    table.insert(silentAimConnections, addedConn)
-    table.insert(silentAimConnections, removingConn)
-end
-
--- 目标计算
-local function getPotentialTargets()
-    local list = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            if STATE.SilentAim.TeamCheck and LocalPlayer.Team and player.Team and LocalPlayer.Team == player.Team then continue end
-            local char = player.Character
-            if char then
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid and humanoid.Health > 0 then table.insert(list, char) end
-            end
-        end
-    end
-    return list
-end
-
-local function calculateTargetPosition(char)
-    local primary = char:FindFirstChild("HumanoidRootPart")
-    local secondary = char:FindFirstChild("Head")
-    local part = primary or secondary
-    return part and part.Position
-end
-
-local function checkViewPosition(pos)
-    if not Camera then return false, math.huge end
-    local screenPos, visible = Camera:WorldToViewportPoint(pos)
-    if not visible then return false, math.huge end
-    local center = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-    local distance = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
-    return distance <= silentAimConfig.fov_range, distance
-end
-
-local function findOptimalTarget()
-    if not LocalPlayer.Character then return nil end
-    local localPos = calculateTargetPosition(LocalPlayer.Character)
-    if not localPos then return nil end
-    local bestTarget, bestScore = nil, math.huge
-    for _, target in ipairs(getPotentialTargets()) do
-        local targetPos = calculateTargetPosition(target)
-        if targetPos then
-            local inView, viewDist = checkViewPosition(targetPos)
-            if inView then
-                local worldDist = (targetPos - localPos).Magnitude
-                local score = viewDist + worldDist * 0.5
-                if silentAimDecorations[target] then score = score * 0.7 end
-                if score < bestScore then
-                    bestScore = score
-                    bestTarget = target
-                end
-            end
-        end
-    end
-    return bestTarget
-end
-
-local bodySegments = {"UpperTorso", "LowerTorso", "HumanoidRootPart", "RightUpperArm", "LeftUpperArm", "RightUpperLeg", "LeftUpperLeg"}
-local function selectTargetPoint(char, preferHead)
-    if preferHead then
-        local head = char:FindFirstChild("Head")
-        if head then return head end
-    end
-    for _, segment in ipairs(bodySegments) do
-        local part = char:FindFirstChild(segment)
-        if part then return part end
-    end
-    return char:FindFirstChild("HumanoidRootPart")
-end
-
--- 渲染循环
-local renderConn
-local function startRenderLoop()
-    if renderConn then renderConn:Disconnect() end
-    renderConn = RunService.RenderStepped:Connect(function()
-        Camera = workspace.CurrentCamera or Camera
-        fovCircle.Position = Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)
-        fovCircle.Radius = silentAimConfig.fov_range
-        fovCircle.Visible = silentAimActive
-        if silentAimActive then
-            local targetChar = findOptimalTarget()
-            if targetChar then
-                local targetPos = calculateTargetPosition(targetChar)
-                if targetPos then
-                    local screenPos, visible = Camera:WorldToViewportPoint(targetPos)
-                    if visible then
-                        targetDot.Position = Vector2.new(screenPos.X, screenPos.Y)
-                        targetDot.Visible = true
-                        local preferHead = math.random(1, 100) <= silentAimConfig.marker_chance
-                        local targetPart = selectTargetPoint(targetChar, preferHead)
-                        silentAimTarget = {
-                            Reference = silentAimDecorations[targetChar] or targetPart,
-                            Location = (silentAimDecorations[targetChar] or targetPart).Position
-                        }
-                    else
-                        targetDot.Visible = false
-                        silentAimTarget = nil
-                    end
-                else
-                    targetDot.Visible = false
-                    silentAimTarget = nil
-                end
-            else
-                targetDot.Visible = false
-                silentAimTarget = nil
-            end
-        else
-            targetDot.Visible = false
-            silentAimTarget = nil
-        end
-    end)
-    table.insert(silentAimConnections, renderConn)
-end
-
--- 射线钩子
-local function setupRaycastHook()
-    local raycastService
-    pcall(function() raycastService = require(ReplicatedStorage.Common.AsyncService.AsyncRaycast) end)
-    if raycastService and raycastService.Raycast then
-        silentAimOriginalRaycast = raycastService.Raycast
-        raycastService.Raycast = function(...)
-            local results = {silentAimOriginalRaycast(...)}
-            if not results[1] and silentAimActive and silentAimConfig.path_adjust and silentAimTarget then
-                local origin = ...
-                local direction = select(2, ...)
-                local params = select(3, ...)
-                local targetRef = silentAimTarget.Reference
-                if targetRef and targetRef:IsA("BasePart") then
-                    local targetPos = targetRef.Position
-                    local toTarget = targetPos - origin
-                    local projection = toTarget:Dot(direction.Unit)
-                    if projection > 0 then
-                        local nearestPoint = origin + direction.Unit * projection
-                        local offset = (nearestPoint - targetPos).Magnitude
-                        if offset <= silentAimConfig.proximity_limit then
-                            return true, {
-                                Position = nearestPoint,
-                                Instance = targetRef,
-                                Material = Enum.Material.Plastic,
-                                Normal = (nearestPoint - targetPos).Unit
-                            }
-                        end
-                    end
-                end
-            end
-            return unpack(results)
-        end
-    end
-end
-
--- 子弹钩子
-local function setupSpawnBulletHook()
-    local shootComponent
-    pcall(function()
-        local path = ReplicatedStorage
-        path = path:FindFirstChild("Client")
-        if path then path = path:FindFirstChild("CombatController") end
-        if path then path = path:FindFirstChild("ClientComponent") end
-        if path then path = path:FindFirstChild("ClientShootableComponent") end
-        if path then shootComponent = require(path) end
-    end)
-    if not shootComponent then
-        pcall(function()
-            local path = ReplicatedStorage:FindFirstChild("Client")
-            if path then path = path:FindFirstChild("ClientShootableComponent") end
-            if path then shootComponent = require(path) end
-        end)
-    end
-    if shootComponent and shootComponent.SpawnBullet and hookfunction then
-        silentAimOriginalSpawnBullet = shootComponent.SpawnBullet
-        hookfunction(shootComponent.SpawnBullet, newcclosure(function(...)
-            if silentAimActive and math.random(1, 100) <= silentAimConfig.rotation_chance and silentAimTarget then
-                local char = LocalPlayer.Character
-                if char then
-                    local root = char:FindFirstChild("HumanoidRootPart")
-                    if root then
-                        local myPos = root.Position
-                        local targetRef = silentAimTarget.Reference
-                        if targetRef then
-                            local targetPos = targetRef.Position
-                            local direction = (Vector3.new(targetPos.X, myPos.Y, targetPos.Z) - myPos).Unit
-                            if direction.Magnitude > 0.001 then
-                                root.CFrame = CFrame.lookAt(myPos, myPos + direction)
-                            end
-                        end
-                    end
-                end
-            end
-            return silentAimOriginalSpawnBullet(...)
-        end))
-    end
+if ThemeManager then
+	ThemeManager:SetLibrary(Library)
+	ThemeManager:SetFolder("QJScriptTheme")
+	ThemeManager:ApplyToTab(Tabs.Settings)
 end
 
--- 监控线程
-local monitorThread
-local function startMonitor()
-    monitorThread = task.spawn(function()
-        while silentAimActive do
-            task.wait(3)
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and player.Character then
-                    local char = player.Character
-                    local humanoid = char:FindFirstChildOfClass("Humanoid")
-                    if humanoid and humanoid.Health > 0 and not silentAimDecorations[char] then
-                        createDecoration(char)
-                    end
-                end
-            end
-            if silentMarkActive then updateAllMarks() end
-        end
-    end)
+if SaveManager then
+	SaveManager:SetLibrary(Library)
+	SaveManager:IgnoreThemeSettings()
+	SaveManager:SetFolder("QJScriptConfig")
+	SaveManager:BuildConfigSection(Tabs.Settings)
 end
-
--- 启动/停止
-local function startSilentAim()
-    silentAimActive = true
-    fovCircle.Visible = true
-    for _, player in ipairs(Players:GetPlayers()) do setupPlayerSupport(player) end
-    local playerAddedConn = Players.PlayerAdded:Connect(setupPlayerSupport)
-    table.insert(silentAimConnections, playerAddedConn)
-    startRenderLoop()
-    setupRaycastHook()
-    setupSpawnBulletHook()
-    startMonitor()
-    reinitThread = task.spawn(reinitAllDecorations)
-    if STATE.SilentAim.SilentMark then
-        silentMarkActive = true
-        markUpdateThread = task.spawn(markUpdateLoop)
-    end
-end
-
-local function stopSilentAim()
-    silentAimActive = false
-    fovCircle.Visible = false
-    targetDot.Visible = false
-    for _, conn in ipairs(silentAimConnections) do pcall(function() conn:Disconnect() end) end
-    silentAimConnections = {}
-    for char, deco in pairs(silentAimDecorations) do pcall(function() deco:Destroy() end) end
-    silentAimDecorations = {}
-    for char, _ in pairs(silentMarkGuis) do pcall(function() silentMarkGuis[char].gui:Destroy() end) end
-    silentMarkGuis = {}
-    silentMarkActive = false
-    if markUpdateThread then task.cancel(markUpdateThread) markUpdateThread = nil end
-    if reinitThread then task.cancel(reinitThread) reinitThread = nil end
-    if silentAimOriginalRaycast then
-        pcall(function()
-            local raycastService = require(ReplicatedStorage.Common.AsyncService.AsyncRaycast)
-            if raycastService then raycastService.Raycast = silentAimOriginalRaycast end
-        end)
-        silentAimOriginalRaycast = nil
-    end
-    if silentAimOriginalSpawnBullet then
-        pcall(function()
-            local shootComponent = require(ReplicatedStorage.Client.ClientShootableComponent)
-            if shootComponent then shootComponent.SpawnBullet = silentAimOriginalSpawnBullet end
-        end)
-        silentAimOriginalSpawnBullet = nil
-    end
-    if monitorThread then task.cancel(monitorThread) monitorThread = nil end
-end
-
-local function toggleSilentAim(enabled)
-    STATE.SilentAim.Enabled = enabled
-    if enabled then startSilentAim() else stopSilentAim() end
-end
-
-local function toggleSilentMark(enabled)
-    STATE.SilentAim.SilentMark = enabled
-    if enabled then
-        silentMarkActive = true
-        if not markUpdateThread then markUpdateThread = task.spawn(markUpdateLoop) end
-        pcall(updateAllMarks)
-    else
-        silentMarkActive = false
-        for char, _ in pairs(silentMarkGuis) do pcall(function() silentMarkGuis[char].gui:Destroy() end) end
-        silentMarkGuis = {}
-        if markUpdateThread then task.cancel(markUpdateThread) markUpdateThread = nil end
-    end
-end
-
--- ESP管理器
-local ESPManager = {}
-do
-    local Workspace, RunService, Players, CoreGui, Lighting = cloneref(game:GetService("Workspace")), cloneref(game:GetService("RunService")), cloneref(game:GetService("Players")), game:GetService("CoreGui"), cloneref(game:GetService("Lighting"))
-    local lplayer = Players.LocalPlayer
-    local camera = Workspace.CurrentCamera
-    local Cam = Workspace.CurrentCamera
-
-    local ScreenGui = nil
-    local Connections = {}
-    local RotationAngle = -45
-    local Tick = tick()
-
-    local function Create(Class, Properties)
-        local _Instance = typeof(Class) == 'string' and Instance.new(Class) or Class
-        for Property, Value in pairs(Properties) do
-            _Instance[Property] = Value
-        end
-        return _Instance
-    end
-
-    local function FadeOutOnDist(element, distance)
-        if not element then return end
-        local transparency = math.max(0.1, 1 - (distance / STATE.ESP.MaxDistance))
-        if element:IsA("TextLabel") then
-            element.TextTransparency = 1 - transparency
-        elseif element:IsA("ImageLabel") then
-            element.ImageTransparency = 1 - transparency
-        elseif element:IsA("UIStroke") then
-            element.Transparency = 1 - transparency
-        elseif element:IsA("Frame") then
-            element.BackgroundTransparency = 1 - transparency
-        elseif element:IsA("Highlight") then
-            element.FillTransparency = 1 - transparency
-            element.OutlineTransparency = 1 - transparency
-        end
-    end
-
-    local function CreatePlayerESP(plr)
-        if not ScreenGui then return end
-        if Connections[plr] then return end
-
-        local Name = Create("TextLabel", {Parent = ScreenGui, Position = UDim2.new(0.5, 0, 0, -11), Size = UDim2.new(0, 100, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.Code, TextSize = STATE.ESP.FontSize, TextStrokeTransparency = 0, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), RichText = true})
-        local Distance = Create("TextLabel", {Parent = ScreenGui, Position = UDim2.new(0.5, 0, 0, 11), Size = UDim2.new(0, 100, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.Code, TextSize = STATE.ESP.FontSize, TextStrokeTransparency = 0, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), RichText = true})
-        local Weapon = Create("TextLabel", {Parent = ScreenGui, Position = UDim2.new(0.5, 0, 0, 31), Size = UDim2.new(0, 100, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.Code, TextSize = STATE.ESP.FontSize, TextStrokeTransparency = 0, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), RichText = true})
-        local Box = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.75, BorderSizePixel = 0})
-        local Gradient1 = Create("UIGradient", {Parent = Box, Enabled = STATE.ESP.Drawing.Boxes.GradientFill, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, STATE.ESP.Drawing.Boxes.GradientFillRGB1), ColorSequenceKeypoint.new(1, STATE.ESP.Drawing.Boxes.GradientFillRGB2)}})
-        local Outline = Create("UIStroke", {Parent = Box, Enabled = STATE.ESP.Drawing.Boxes.Gradient, Transparency = 0, Color = Color3.fromRGB(255, 255, 255), LineJoinMode = Enum.LineJoinMode.Miter})
-        local Gradient2 = Create("UIGradient", {Parent = Outline, Enabled = STATE.ESP.Drawing.Boxes.Gradient, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, STATE.ESP.Drawing.Boxes.GradientRGB1), ColorSequenceKeypoint.new(1, STATE.ESP.Drawing.Boxes.GradientRGB2)}})
-        local Healthbar = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = Color3.fromRGB(255, 255, 255), BackgroundTransparency = 0})
-        local BehindHealthbar = Create("Frame", {Parent = ScreenGui, ZIndex = -1, BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0})
-        local HealthbarGradient = Create("UIGradient", {Parent = Healthbar, Enabled = STATE.ESP.Drawing.Healthbar.Gradient, Rotation = -90, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, STATE.ESP.Drawing.Healthbar.GradientRGB1), ColorSequenceKeypoint.new(0.5, STATE.ESP.Drawing.Healthbar.GradientRGB2), ColorSequenceKeypoint.new(1, STATE.ESP.Drawing.Healthbar.GradientRGB3)}})
-        local HealthText = Create("TextLabel", {Parent = ScreenGui, Position = UDim2.new(0.5, 0, 0, 31), Size = UDim2.new(0, 100, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.Code, TextSize = STATE.ESP.FontSize, TextStrokeTransparency = 0, TextStrokeColor3 = Color3.fromRGB(0, 0, 0)})
-        local Chams = Create("Highlight", {Parent = ScreenGui, FillTransparency = 1, OutlineTransparency = 0, OutlineColor = Color3.fromRGB(119, 120, 255), DepthMode = "AlwaysOnTop"})
-        local WeaponIcon = Create("ImageLabel", {Parent = ScreenGui, BackgroundTransparency = 1, BorderColor3 = Color3.fromRGB(0, 0, 0), BorderSizePixel = 0, Size = UDim2.new(0, 40, 0, 40)})
-        local Gradient3 = Create("UIGradient", {Parent = WeaponIcon, Rotation = -90, Enabled = STATE.ESP.Drawing.Weapons.Gradient, Color = ColorSequence.new{ColorSequenceKeypoint.new(0, STATE.ESP.Drawing.Weapons.GradientRGB1), ColorSequenceKeypoint.new(1, STATE.ESP.Drawing.Weapons.GradientRGB2)}})
-        local LeftTop = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local LeftSide = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local RightTop = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local RightSide = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local BottomSide = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local BottomDown = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local BottomRightSide = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local BottomRightDown = Create("Frame", {Parent = ScreenGui, BackgroundColor3 = STATE.ESP.Drawing.Boxes.Corner.RGB, Position = UDim2.new(0, 0, 0, 0)})
-        local Flag1 = Create("TextLabel", {Parent = ScreenGui, Position = UDim2.new(1, 0, 0, 0), Size = UDim2.new(0, 100, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.Code, TextSize = STATE.ESP.FontSize, TextStrokeTransparency = 0, TextStrokeColor3 = Color3.fromRGB(0, 0, 0)})
-        local Flag2 = Create("TextLabel", {Parent = ScreenGui, Position = UDim2.new(1, 0, 0, 0), Size = UDim2.new(0, 100, 0, 20), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1, TextColor3 = Color3.fromRGB(255, 255, 255), Font = Enum.Font.Code, TextSize = STATE.ESP.FontSize, TextStrokeTransparency = 0, TextStrokeColor3 = Color3.fromRGB(0, 0, 0)})
-
-        local function HideESP()
-            Box.Visible = false
-            Name.Visible = false
-            Distance.Visible = false
-            Weapon.Visible = false
-            Healthbar.Visible = false
-            BehindHealthbar.Visible = false
-            HealthText.Visible = false
-            WeaponIcon.Visible = false
-            LeftTop.Visible = false
-            LeftSide.Visible = false
-            BottomSide.Visible = false
-            BottomDown.Visible = false
-            RightTop.Visible = false
-            RightSide.Visible = false
-            BottomRightSide.Visible = false
-            BottomRightDown.Visible = false
-            Flag1.Visible = false
-            Chams.Enabled = false
-            Flag2.Visible = false
-        end
-
-        local connection
-        connection = RunService.RenderStepped:Connect(function()
-            if not STATE.ESP.Enabled then
-                HideESP()
-                return
-            end
-
-            if plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-                local HRP = plr.Character.HumanoidRootPart
-                local Humanoid = plr.Character:FindFirstChild("Humanoid")
-                if not Humanoid then return end
-
-                local Pos, OnScreen = Cam:WorldToScreenPoint(HRP.Position)
-                local Dist = (Cam.CFrame.Position - HRP.Position).Magnitude / 3.5714285714
-
-                if OnScreen and Dist <= STATE.ESP.MaxDistance then
-                    local Size = HRP.Size.Y
-                    local scaleFactor = (Size * Cam.ViewportSize.Y) / (Pos.Z * 2)
-                    local w, h = 3 * scaleFactor, 4.5 * scaleFactor
-
-                    if STATE.ESP.FadeOut.OnDistance then
-                        FadeOutOnDist(Box, Dist)
-                        FadeOutOnDist(Outline, Dist)
-                        FadeOutOnDist(Name, Dist)
-                        FadeOutOnDist(Distance, Dist)
-                        FadeOutOnDist(Weapon, Dist)
-                        FadeOutOnDist(Healthbar, Dist)
-                        FadeOutOnDist(BehindHealthbar, Dist)
-                        FadeOutOnDist(HealthText, Dist)
-                        FadeOutOnDist(WeaponIcon, Dist)
-                        FadeOutOnDist(LeftTop, Dist)
-                        FadeOutOnDist(LeftSide, Dist)
-                        FadeOutOnDist(BottomSide, Dist)
-                        FadeOutOnDist(BottomDown, Dist)
-                        FadeOutOnDist(RightTop, Dist)
-                        FadeOutOnDist(RightSide, Dist)
-                        FadeOutOnDist(BottomRightSide, Dist)
-                        FadeOutOnDist(BottomRightDown, Dist)
-                        FadeOutOnDist(Chams, Dist)
-                        FadeOutOnDist(Flag1, Dist)
-                        FadeOutOnDist(Flag2, Dist)
-                    end
-
-                    if STATE.ESP.TeamCheck and plr ~= lplayer and ((lplayer.Team ~= plr.Team and plr.Team) or (not lplayer.Team and not plr.Team)) then
-                        Chams.Adornee = plr.Character
-                        Chams.Enabled = STATE.ESP.Drawing.Chams.Enabled
-                        Chams.FillColor = STATE.ESP.Drawing.Chams.FillRGB
-                        Chams.OutlineColor = STATE.ESP.Drawing.Chams.OutlineRGB
-                        if STATE.ESP.Drawing.Chams.Thermal then
-                            local breathe_effect = math.atan(math.sin(tick() * 2)) * 2 / math.pi
-                            Chams.FillTransparency = STATE.ESP.Drawing.Chams.Fill_Transparency * breathe_effect * 0.01
-                            Chams.OutlineTransparency = STATE.ESP.Drawing.Chams.Outline_Transparency * breathe_effect * 0.01
-                        else
-                            Chams.FillTransparency = STATE.ESP.Drawing.Chams.Fill_Transparency * 0.01
-                            Chams.OutlineTransparency = STATE.ESP.Drawing.Chams.Outline_Transparency * 0.01
-                        end
-                        Chams.DepthMode = STATE.ESP.Drawing.Chams.VisibleCheck and "Occluded" or "AlwaysOnTop"
-
-                        LeftTop.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        LeftTop.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y - h / 2)
-                        LeftTop.Size = UDim2.new(0, w / 5, 0, 1)
-
-                        LeftSide.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        LeftSide.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y - h / 2)
-                        LeftSide.Size = UDim2.new(0, 1, 0, h / 5)
-
-                        BottomSide.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        BottomSide.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y + h / 2)
-                        BottomSide.Size = UDim2.new(0, 1, 0, h / 5)
-                        BottomSide.AnchorPoint = Vector2.new(0, 5)
-
-                        BottomDown.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        BottomDown.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y + h / 2)
-                        BottomDown.Size = UDim2.new(0, w / 5, 0, 1)
-                        BottomDown.AnchorPoint = Vector2.new(0, 1)
-
-                        RightTop.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        RightTop.Position = UDim2.new(0, Pos.X + w / 2, 0, Pos.Y - h / 2)
-                        RightTop.Size = UDim2.new(0, w / 5, 0, 1)
-                        RightTop.AnchorPoint = Vector2.new(1, 0)
-
-                        RightSide.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        RightSide.Position = UDim2.new(0, Pos.X + w / 2 - 1, 0, Pos.Y - h / 2)
-                        RightSide.Size = UDim2.new(0, 1, 0, h / 5)
-                        RightSide.AnchorPoint = Vector2.new(0, 0)
-
-                        BottomRightSide.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        BottomRightSide.Position = UDim2.new(0, Pos.X + w / 2, 0, Pos.Y + h / 2)
-                        BottomRightSide.Size = UDim2.new(0, 1, 0, h / 5)
-                        BottomRightSide.AnchorPoint = Vector2.new(1, 1)
-
-                        BottomRightDown.Visible = STATE.ESP.Drawing.Boxes.Corner.Enabled
-                        BottomRightDown.Position = UDim2.new(0, Pos.X + w / 2, 0, Pos.Y + h / 2)
-                        BottomRightDown.Size = UDim2.new(0, w / 5, 0, 1)
-                        BottomRightDown.AnchorPoint = Vector2.new(1, 1)
-
-                        Box.Position = UDim2.new(0, Pos.X - w / 2, 0, Pos.Y - h / 2)
-                        Box.Size = UDim2.new(0, w, 0, h)
-                        Box.Visible = STATE.ESP.Drawing.Boxes.Full.Enabled
-                        if STATE.ESP.Drawing.Boxes.Filled.Enabled then
-                            Box.BackgroundColor3 = STATE.ESP.Drawing.Boxes.Filled.RGB
-                            Box.BackgroundTransparency = STATE.ESP.Drawing.Boxes.Filled.Transparency
-                        else
-                            Box.BackgroundTransparency = 1
-                        end
-
-                        RotationAngle = RotationAngle + (tick() - Tick) * STATE.ESP.Drawing.Boxes.RotationSpeed * math.cos(math.pi / 4 * tick() - math.pi / 2)
-                        if STATE.ESP.Drawing.Boxes.Animate then
-                            Gradient1.Rotation = RotationAngle
-                            Gradient2.Rotation = RotationAngle
-                        else
-                            Gradient1.Rotation = -45
-                            Gradient2.Rotation = -45
-                        end
-                        Tick = tick()
-
-                        local health = Humanoid.Health / Humanoid.MaxHealth
-                        Healthbar.Visible = STATE.ESP.Drawing.Healthbar.Enabled
-                        Healthbar.Position = UDim2.new(0, Pos.X - w / 2 - 6, 0, Pos.Y - h / 2 + h * (1 - health))
-                        Healthbar.Size = UDim2.new(0, STATE.ESP.Drawing.Healthbar.Width, 0, h * health)
-
-                        BehindHealthbar.Visible = STATE.ESP.Drawing.Healthbar.Enabled
-                        BehindHealthbar.Position = UDim2.new(0, Pos.X - w / 2 - 6, 0, Pos.Y - h / 2)
-                        BehindHealthbar.Size = UDim2.new(0, STATE.ESP.Drawing.Healthbar.Width, 0, h)
-
-                        if STATE.ESP.Drawing.Healthbar.HealthText then
-                            local healthPercentage = math.floor(Humanoid.Health / Humanoid.MaxHealth * 100)
-                            HealthText.Position = UDim2.new(0, Pos.X - w / 2 - 6, 0, Pos.Y - h / 2 + h * (1 - healthPercentage / 100) + 3)
-                            HealthText.Text = tostring(healthPercentage)
-                            HealthText.Visible = Humanoid.Health < Humanoid.MaxHealth
-                            if STATE.ESP.Drawing.Healthbar.Lerp then
-                                local color = health >= 0.75 and Color3.fromRGB(0, 255, 0) or health >= 0.5 and Color3.fromRGB(255, 255, 0) or health >= 0.25 and Color3.fromRGB(255, 170, 0) or Color3.fromRGB(255, 0, 0)
-                                HealthText.TextColor3 = color
-                            else
-                                HealthText.TextColor3 = STATE.ESP.Drawing.Healthbar.HealthTextRGB
-                            end
-                        else
-                            HealthText.Visible = false
-                        end
-
-                        Name.Visible = STATE.ESP.Drawing.Names.Enabled
-                        if STATE.ESP.Options.Friendcheck and lplayer:IsFriendsWith(plr.UserId) then
-                            Name.Text = string.format('(<font color="rgb(%d, %d, %d)">F</font>) %s', STATE.ESP.Options.FriendcheckRGB.R * 255, STATE.ESP.Options.FriendcheckRGB.G * 255, STATE.ESP.Options.FriendcheckRGB.B * 255, plr.Name)
-                        else
-                            Name.Text = string.format('(<font color="rgb(%d, %d, %d)">E</font>) %s', 255, 0, 0, plr.Name)
-                        end
-                        Name.Position = UDim2.new(0, Pos.X, 0, Pos.Y - h / 2 - 9)
-
-                        if STATE.ESP.Drawing.Distances.Enabled then
-                            if STATE.ESP.Drawing.Distances.Position == "Bottom" then
-                                Weapon.Position = UDim2.new(0, Pos.X, 0, Pos.Y + h / 2 + 18)
-                                WeaponIcon.Position = UDim2.new(0, Pos.X - 21, 0, Pos.Y + h / 2 + 15)
-                                Distance.Position = UDim2.new(0, Pos.X, 0, Pos.Y + h / 2 + 7)
-                                Distance.Text = string.format("%d meters", math.floor(Dist))
-                                Distance.Visible = true
-                            elseif STATE.ESP.Drawing.Distances.Position == "Text" then
-                                Weapon.Position = UDim2.new(0, Pos.X, 0, Pos.Y + h / 2 + 8)
-                                WeaponIcon.Position = UDim2.new(0, Pos.X - 21, 0, Pos.Y + h / 2 + 5)
-                                Distance.Visible = false
-                                if STATE.ESP.Options.Friendcheck and lplayer:IsFriendsWith(plr.UserId) then
-                                    Name.Text = string.format('(<font color="rgb(%d, %d, %d)">F</font>) %s [%d]', STATE.ESP.Options.FriendcheckRGB.R * 255, STATE.ESP.Options.FriendcheckRGB.G * 255, STATE.ESP.Options.FriendcheckRGB.B * 255, plr.Name, math.floor(Dist))
-                                else
-                                    Name.Text = string.format('(<font color="rgb(%d, %d, %d)">E</font>) %s [%d]', 255, 0, 0, plr.Name, math.floor(Dist))
-                                end
-                                Name.Visible = STATE.ESP.Drawing.Names.Enabled
-                            end
-                        end
-
-                        Weapon.Text = "none"
-                        Weapon.Visible = STATE.ESP.Drawing.Weapons.Enabled
-                    else
-                        HideESP()
-                    end
-                else
-                    HideESP()
-                end
-            else
-                HideESP()
-            end
-        end)
-
-        Connections[plr] = {connection}
-    end
-
-    function ESPManager:Start()
-        if ScreenGui then return end
-        ScreenGui = Create("ScreenGui", {
-            Parent = CoreGui,
-            Name = "QJ_ESPHolder",
-        })
-
-        for _, v in pairs(Players:GetPlayers()) do
-            if v ~= lplayer and not Connections[v] then
-                CreatePlayerESP(v)
-            end
-        end
-
-        Connections.PlayerAdded = Players.PlayerAdded:Connect(function(v)
-            if v ~= lplayer and not Connections[v] then
-                CreatePlayerESP(v)
-            end
-        end)
-    end
-
-    function ESPManager:Stop()
-        if ScreenGui then
-            ScreenGui:Destroy()
-            ScreenGui = nil
-        end
-        for _, conn in pairs(Connections) do
-            if type(conn) == "table" then
-                for _, c in ipairs(conn) do
-                    c:Disconnect()
-                end
-            else
-                conn:Disconnect()
-            end
-        end
-        Connections = {}
-    end
-
-    function ESPManager:SetEnabled(enabled)
-        STATE.ESP.Enabled = enabled
-        if enabled then
-            self:Start()
-        else
-            self:Stop()
-        end
-    end
-end
-
--- UI设置
-local SettingsTab = Window:Tab({ Title = "UI设置", Icon = "crown" })
-local SilentAimTab = Window:Tab({ Title = "瞄准辅助", Icon = "target" })
-local ESPTab = Window:Tab({ Title = "华丽ESP", Icon = "eye" })
-local AboutTab = Window:Tab({ Title = "关于", Icon = "info" })
-
-SettingsTab:Toggle({ Title = "启用边框", Value = borderEnabled, Callback = function(v) borderEnabled = v; applyBorderState(); WindUI:Notify({ Title="QJ | 边框", Content=v and "已开启" or "已关闭", Duration=2 }) end })
-SettingsTab:Dropdown({ Title = "边框配色", Values = colorSchemeNames, Value = "Blue White", Callback = function(v) currentBorderColorScheme = v; local mf = Window.UIElements and Window.UIElements.Main; if mf then local rs = mf:FindFirstChild("RainbowStroke"); if rs then local ge = rs:FindFirstChild("GlowEffect"); if ge and COLOR_SCHEMES[v] then ge.Color = COLOR_SCHEMES[v][1] end end end end })
-SettingsTab:Slider({ Title = "边框速度", Value = { Min=1, Max=10, Default=6 }, Callback = function(v) animationSpeed = v; if rainbowBorderAnimation then rainbowBorderAnimation:Disconnect(); rainbowBorderAnimation = nil end; local mf = Window.UIElements and Window.UIElements.Main; if mf and mf.Visible and borderEnabled then local rs = mf:FindFirstChild("RainbowStroke"); if rs and rs.Enabled then startBorderAnimation(Window, animationSpeed) end end end })
-SettingsTab:Slider({ Title = "边框粗细", Value = { Min=1, Max=5, Default=2.65, Step=0.5 }, Callback = function(v) local mf = Window.UIElements and Window.UIElements.Main; if mf then local rs = mf:FindFirstChild("RainbowStroke"); if rs then rs.Thickness = v end end end })
-SettingsTab:Slider({ Title = "圆角大小", Value = { Min=0, Max=20, Default=17 }, Callback = function(v) local mf = Window.UIElements and Window.UIElements.Main; if mf then local cr = mf:FindFirstChildOfClass("UICorner"); if not cr then cr = Instance.new("UICorner"); cr.Parent = mf end; cr.CornerRadius = UDim.new(0, v) end end })
-
-SilentAimTab:Toggle({ Title = "启用静默自瞄", Value = STATE.SilentAim.Enabled, Callback = toggleSilentAim })
-SilentAimTab:Toggle({ Title = "静默标记", Value = STATE.SilentAim.SilentMark, Callback = toggleSilentMark })
-
--- ESP选项卡
-local ESPGroup = ESPTab:Section({ Title = "ESP总控制", Opened = true })
-ESPGroup:Toggle({ Title = "启用ESP", Value = STATE.ESP.Enabled, Callback = function(v) ESPManager:SetEnabled(v) end })
-ESPGroup:Divider()
-ESPGroup:Toggle({ Title = "队伍检测", Value = STATE.ESP.TeamCheck, Callback = function(v) STATE.ESP.TeamCheck = v end })
-ESPGroup:Slider({ Title = "最大距离", Value = { Min=50, Max=500, Default=STATE.ESP.MaxDistance, Step=10 }, Callback = function(v) STATE.ESP.MaxDistance = v end })
-ESPGroup:Slider({ Title = "字体大小", Value = { Min=8, Max=20, Default=STATE.ESP.FontSize, Step=1 }, Callback = function(v) STATE.ESP.FontSize = v end })
-
-local fadeGroup = ESPTab:Section({ Title = "淡出效果", Opened = true })
-fadeGroup:Toggle({ Title = "距离淡出", Value = STATE.ESP.FadeOut.OnDistance, Callback = function(v) STATE.ESP.FadeOut.OnDistance = v end })
-fadeGroup:Toggle({ Title = "死亡淡出", Value = STATE.ESP.FadeOut.OnDeath, Callback = function(v) STATE.ESP.FadeOut.OnDeath = v end })
-fadeGroup:Toggle({ Title = "离开淡出", Value = STATE.ESP.FadeOut.OnLeave, Callback = function(v) STATE.ESP.FadeOut.OnLeave = v end })
-
-local friendGroup = ESPTab:Section({ Title = "好友标记", Opened = true })
-friendGroup:Toggle({ Title = "启用好友检测", Value = STATE.ESP.Options.Friendcheck, Callback = function(v) STATE.ESP.Options.Friendcheck = v end })
-
-local chamsGroup = ESPTab:Section({ Title = "Chams", Opened = true })
-chamsGroup:Toggle({ Title = "启用Chams", Value = STATE.ESP.Drawing.Chams.Enabled, Callback = function(v) STATE.ESP.Drawing.Chams.Enabled = v end })
-chamsGroup:Toggle({ Title = "呼吸效果", Value = STATE.ESP.Drawing.Chams.Thermal, Callback = function(v) STATE.ESP.Drawing.Chams.Thermal = v end })
-chamsGroup:Slider({ Title = "填充透明度(%)", Value = { Min=0, Max=100, Default=STATE.ESP.Drawing.Chams.Fill_Transparency, Step=5 }, Callback = function(v) STATE.ESP.Drawing.Chams.Fill_Transparency = v end })
-chamsGroup:Slider({ Title = "描边透明度(%)", Value = { Min=0, Max=100, Default=STATE.ESP.Drawing.Chams.Outline_Transparency, Step=5 }, Callback = function(v) STATE.ESP.Drawing.Chams.Outline_Transparency = v end })
-chamsGroup:Toggle({ Title = "仅遮挡可见", Value = STATE.ESP.Drawing.Chams.VisibleCheck, Callback = function(v) STATE.ESP.Drawing.Chams.VisibleCheck = v end })
-
-local nameGroup = ESPTab:Section({ Title = "名字", Opened = true })
-nameGroup:Toggle({ Title = "显示名字", Value = STATE.ESP.Drawing.Names.Enabled, Callback = function(v) STATE.ESP.Drawing.Names.Enabled = v end })
-
-local distGroup = ESPTab:Section({ Title = "距离", Opened = true })
-distGroup:Toggle({ Title = "显示距离", Value = STATE.ESP.Drawing.Distances.Enabled, Callback = function(v) STATE.ESP.Drawing.Distances.Enabled = v end })
-distGroup:Dropdown({ Title = "位置", Values = {"Text","Bottom"}, Value = STATE.ESP.Drawing.Distances.Position, Multi = false, Callback = function(v) STATE.ESP.Drawing.Distances.Position = v end })
-
-local weaponGroup = ESPTab:Section({ Title = "武器", Opened = true })
-weaponGroup:Toggle({ Title = "显示武器", Value = STATE.ESP.Drawing.Weapons.Enabled, Callback = function(v) STATE.ESP.Drawing.Weapons.Enabled = v end })
-weaponGroup:Toggle({ Title = "渐变", Value = STATE.ESP.Drawing.Weapons.Gradient, Callback = function(v) STATE.ESP.Drawing.Weapons.Gradient = v end })
-
-local healthGroup = ESPTab:Section({ Title = "血条", Opened = true })
-healthGroup:Toggle({ Title = "显示血条", Value = STATE.ESP.Drawing.Healthbar.Enabled, Callback = function(v) STATE.ESP.Drawing.Healthbar.Enabled = v end })
-healthGroup:Toggle({ Title = "血量文字", Value = STATE.ESP.Drawing.Healthbar.HealthText, Callback = function(v) STATE.ESP.Drawing.Healthbar.HealthText = v end })
-healthGroup:Toggle({ Title = "动态颜色", Value = STATE.ESP.Drawing.Healthbar.Lerp, Callback = function(v) STATE.ESP.Drawing.Healthbar.Lerp = v end })
-healthGroup:Slider({ Title = "血条宽度", Value = { Min=1, Max=10, Default=STATE.ESP.Drawing.Healthbar.Width, Step=0.5 }, Callback = function(v) STATE.ESP.Drawing.Healthbar.Width = v end })
-healthGroup:Toggle({ Title = "渐变血条", Value = STATE.ESP.Drawing.Healthbar.Gradient, Callback = function(v) STATE.ESP.Drawing.Healthbar.Gradient = v end })
-
-local boxGroup = ESPTab:Section({ Title = "方框", Opened = true })
-boxGroup:Toggle({ Title = "显示完整方框", Value = STATE.ESP.Drawing.Boxes.Full.Enabled, Callback = function(v) STATE.ESP.Drawing.Boxes.Full.Enabled = v end })
-boxGroup:Toggle({ Title = "显示填充", Value = STATE.ESP.Drawing.Boxes.Filled.Enabled, Callback = function(v) STATE.ESP.Drawing.Boxes.Filled.Enabled = v end })
-boxGroup:Slider({ Title = "填充透明度", Value = { Min=0, Max=1, Default=STATE.ESP.Drawing.Boxes.Filled.Transparency, Step=0.05 }, Callback = function(v) STATE.ESP.Drawing.Boxes.Filled.Transparency = v end })
-boxGroup:Toggle({ Title = "显示角框", Value = STATE.ESP.Drawing.Boxes.Corner.Enabled, Callback = function(v) STATE.ESP.Drawing.Boxes.Corner.Enabled = v end })
-boxGroup:Toggle({ Title = "动画框", Value = STATE.ESP.Drawing.Boxes.Animate, Callback = function(v) STATE.ESP.Drawing.Boxes.Animate = v end })
-boxGroup:Slider({ Title = "动画速度", Value = { Min=100, Max=500, Default=STATE.ESP.Drawing.Boxes.RotationSpeed, Step=10 }, Callback = function(v) STATE.ESP.Drawing.Boxes.RotationSpeed = v end })
-boxGroup:Toggle({ Title = "渐变描边", Value = STATE.ESP.Drawing.Boxes.Gradient, Callback = function(v) STATE.ESP.Drawing.Boxes.Gradient = v end })
-boxGroup:Toggle({ Title = "填充渐变", Value = STATE.ESP.Drawing.Boxes.GradientFill, Callback = function(v) STATE.ESP.Drawing.Boxes.GradientFill = v end })
-
-WindUI:Notify({ Title = "QJ 狙击竞技场", Content ="v1.1.0 加载成功", Duration = 2 })
