@@ -17,25 +17,6 @@ local Window = WindUI:CreateWindow({
     HideSearchBar = false,
 })
 
-Window:Tag({
-    Title = "超高速跑者",
-    Color = Color3.fromHex("#00ffff")
-})
-
-Window:EditOpenButton({
-    Title = "超高速跑者",
-    Icon = "crown",
-    CornerRadius = UDim.new(0, 8),
-    StrokeThickness = 3,
-    Color = ColorSequence.new(
-        Color3.fromRGB(255, 255, 0),
-        Color3.fromRGB(255, 165, 0),
-        Color3.fromRGB(255, 0, 0),
-        Color3.fromRGB(139, 0, 0)
-    ),
-    Draggable = true,
-})
-
 local MainTab = Window:Tab({Title = "主要功能", Icon = "settings"})
 MainTab:Section({Title = "主要功能", Opened = true})
 
